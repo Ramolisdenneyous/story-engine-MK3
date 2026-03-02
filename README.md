@@ -130,8 +130,8 @@ cd "C:\Users\Raymond\Desktop\Test File\hello.js\story-engine"
 
 ### Access the App
 
-- Frontend: `http://localhost:5173`
-- Backend health check: `http://localhost:8000/health`
+- Frontend: `http://localhost:5174`
+- Backend health check: `http://localhost:8001/health`
 
 ## How to Test the MVP
 
@@ -209,3 +209,4 @@ Attribution reference:
 
 The original source specification used for this prototype is included here:
 - `story-engine-prototype-SPEC (5).txt`
+
