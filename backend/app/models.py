@@ -30,6 +30,19 @@ class EventRole(str, enum.Enum):
     SYSTEM = "system"
 
 
+class EventKind(str, enum.Enum):
+    TRANSCRIPT = "transcript"
+    DICE_ROLL = "dice_roll"
+    INITIATIVE_SET = "initiative_set"
+    TURN_ENDED = "turn_ended"
+    DAMAGE_APPLIED = "damage_applied"
+    CONDITION_ADDED = "condition_added"
+    CONDITION_REMOVED = "condition_removed"
+    INVENTORY_GAINED = "inventory_gained"
+    INVENTORY_LOST = "inventory_lost"
+    IMAGE_GENERATED = "image_generated"
+
+
 class MemoryBlockType(str, enum.Enum):
     WORLD_CHAPTER_LOCK = "world_chapter_lock"
     TURN_DELTA = "turn_delta"
@@ -46,6 +59,9 @@ class Session(Base):
     tab1_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_summarized_prompt_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     narrative_agent_definition_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    combat_state: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
+    generated_image: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
+    selected_narrative_player_id: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -57,6 +73,10 @@ class Tab1Inputs(Base):
     world_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     chapter_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     agent_identity_text_by_slot: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
+    preset_id: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    adventure_id: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    selected_player_ids: Mapped[list] = mapped_column(json_type(), default=list, nullable=False)
+    class_assignments: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
@@ -67,8 +87,10 @@ class Event(Base):
     session_id: Mapped[str] = mapped_column(String(36), ForeignKey("sessions.session_id", ondelete="CASCADE"), nullable=False, index=True)
     prompt_index: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     role: Mapped[EventRole] = mapped_column(Enum(EventRole), nullable=False)
+    kind: Mapped[EventKind] = mapped_column(Enum(EventKind), default=EventKind.TRANSCRIPT, nullable=False)
     agent_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    json_payload: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 

@@ -12,7 +12,8 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://story:story@postgres:5432/story_engine
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
