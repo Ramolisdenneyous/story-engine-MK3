@@ -12,5 +12,6 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/vite.config.ts ./vite.config.ts
 EXPOSE 5173
 CMD ["sh", "-c", "npm run preview -- --host 0.0.0.0 --port ${PORT:-5173}"]
