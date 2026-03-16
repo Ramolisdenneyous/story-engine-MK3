@@ -57,7 +57,7 @@ def test_prompt_index_increments_only_on_user_prompt(client: TestClient):
 
     detail = client.get(f"/session/{session_id}").json()
     transcript_events = [event for event in detail["events"] if event["kind"] == "transcript"]
-    assert len(transcript_events) == 6
+    assert len(transcript_events) == 7
     assert [event["prompt_index"] for event in transcript_events if event["role"] == "user"] == [1, 2, 3]
     assert [event["prompt_index"] for event in transcript_events if event["role"] == "agent"] == [1, 2, 3]
 
