@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -24,6 +24,7 @@ from .schemas import (
     SessionCreateResponse,
     SessionDetailResponse,
     SessionSummary,
+    TTSRequest,
     Tab1InputPayload,
     Tab1InputResponse,
 )
@@ -42,6 +43,7 @@ from .services import (
     roll_initiative,
     save_narrative_agent,
     save_tab1,
+    synthesize_player_reply_tts,
 )
 
 app = FastAPI(title="Story Engine MK2", version="2.0.0")
@@ -261,6 +263,17 @@ def generate_image_endpoint(session_id: str, db: Session = Depends(get_db)):
         return ImageGenerateResponse(image_url=data["image_url"], prompt_text=data["prompt_text"])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/session/{session_id}/tts")
+def tts_endpoint(session_id: str, payload: TTSRequest, db: Session = Depends(get_db)):
+    try:
+        audio_bytes = synthesize_player_reply_tts(db, session_id, payload.text, payload.player_name)
+        return Response(content=audio_bytes, media_type="audio/mpeg")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @app.post("/session/{session_id}/reset", response_model=SessionSummary)

@@ -164,6 +164,11 @@ class ImageGenerateResponse(BaseModel):
     prompt_text: str
 
 
+class TTSRequest(BaseModel):
+    text: str
+    player_name: str
+
+
 class ImageStateOut(BaseModel):
     image_url: str
     prompt_text: str

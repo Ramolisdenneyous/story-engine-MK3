@@ -20,7 +20,7 @@ from .game_data import (
     VALASKA_PRESET_ID,
     VALASKA_SYSTEM_PROMPT,
 )
-from .llm import get_provider, log_artifact
+from .llm import get_provider, log_artifact, tts_voice_alias_for_player
 from .models import Event, EventKind, EventRole, MemoryBlock, MemoryBlockType, NarrativeDraft, Session as SessionModel, SessionState, Tab1Inputs
 
 DICE_RE = re.compile(r"^\s*(\d{1,3})\s*d\s*(4|6|8|10|12|20)\s*([+-]\s*\d+)?\s*$", re.IGNORECASE)
@@ -914,6 +914,15 @@ def generate_scene_image(db: Session, session_id: str) -> dict:
     )
     db.commit()
     return session.generated_image
+
+
+def synthesize_player_reply_tts(db: Session, session_id: str, text: str, player_name: str) -> bytes:
+    get_session_or_404(db, session_id)
+    provider = get_provider()
+    clean_text = (text or "").strip()
+    if not clean_text:
+        raise ValueError("Reply text is required for TTS")
+    return provider.generate_speech(clean_text, tts_voice_alias_for_player(player_name))
 
 
 def derive_party_state(db: Session, session_id: str) -> dict[str, dict]:

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { api, resolveApiUrl } from "./api";
+import { api, apiBlob, resolveApiUrl } from "./api";
 
 type SessionState = "DRAFT_TAB1" | "LOCKING" | "ACTIVE" | "SUMMARIZING" | "ENDED" | "NARRATING" | "RESETTING";
 
@@ -135,10 +135,27 @@ const MUSIC_TRACKS = [
   "Gallows of the Forgotten King.mp3",
 ].map((fileName) => resolveApiUrl(`/music/${encodeURIComponent(fileName)}`));
 const TESTING_PASSWORD = "Rayis1cooldude";
+const ADVENTURE_TITLE_OVERRIDES: Record<string, string> = {
+  "icebane-castle": "Memories of the Witch King",
+  "east-marsh-raid": "Blood at Midnight",
+  "telas-wagons": "To Follow the King's Way",
+  "old-people-barrow": "The Dead Remember",
+  "collecting-taxes": "Collecting What's Owed",
+  "endless-glacier-undead": "Nightmares of the Thawed",
+};
+const TTS_STATUS_LABELS = {
+  idle: "Idle",
+  loading: "Loading",
+  playing: "Playing",
+} as const;
 
 export function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const speechAudioRef = useRef<HTMLAudioElement | null>(null);
+  const speechObjectUrlRef = useRef<string | null>(null);
+  const speechAbortRef = useRef<AbortController | null>(null);
+  const autoPlayBaselineRef = useRef<string | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [sessionId, setSessionId] = useState("");
   const [detail, setDetail] = useState<SessionDetail | null>(null);
@@ -163,6 +180,9 @@ export function App() {
   const [diceFormula, setDiceFormula] = useState("1d20");
   const [diceResult, setDiceResult] = useState("");
   const [selectedNarrativePlayerId, setSelectedNarrativePlayerId] = useState("");
+  const [ttsAutoPlay, setTtsAutoPlay] = useState(false);
+  const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing">("idle");
+  const [ttsError, setTtsError] = useState("");
 
   async function boot() {
     setLoading(true);
@@ -206,6 +226,19 @@ export function App() {
     if (!detail) return [];
     return detail.events.filter((event) => event.kind === "transcript");
   }, [detail]);
+  const latestEligibleReply = useMemo(() => {
+    for (let index = transcript.length - 1; index >= 0; index -= 1) {
+      const event = transcript[index];
+      if (event.role === "agent") {
+        return event;
+      }
+    }
+    return null;
+  }, [transcript]);
+  const playerNameBySlot = useMemo(
+    () => new Map((detail?.tab1.party ?? []).map((member) => [member.slot, member.player_name])),
+    [detail],
+  );
 
   useEffect(() => {
     const box = transcriptRef.current;
@@ -214,9 +247,28 @@ export function App() {
   }, [detail?.events.length, detail?.session.prompt_index]);
 
   useEffect(() => {
+    const speechAudio = new Audio();
+    speechAudioRef.current = speechAudio;
+    const onEnded = () => setTtsState("idle");
+    const onPause = () => setTtsState((current) => (current === "playing" ? "idle" : current));
+    speechAudio.addEventListener("ended", onEnded);
+    speechAudio.addEventListener("pause", onPause);
+    return () => {
+      speechAudio.pause();
+      speechAudio.removeEventListener("ended", onEnded);
+      speechAudio.removeEventListener("pause", onPause);
+      speechAbortRef.current?.abort();
+      if (speechObjectUrlRef.current) {
+        URL.revokeObjectURL(speechObjectUrlRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.volume = 0.35;
+    audio.load();
+    audio.volume = 0.18;
     audio.muted = musicMuted;
     if (musicPlaying) {
       void audio.play().catch(() => {
@@ -269,9 +321,113 @@ export function App() {
     () => catalog?.adventures.find((item) => item.adventure_id === adventureId) ?? null,
     [adventureId, catalog],
   );
+  const currentTrack = MUSIC_TRACKS[trackIndex] ?? "";
+  const startRequirements = [
+    adventureId === "" ? "select an adventure" : null,
+    selectedPlayerIds.length < 4 ? "select four players" : null,
+    selectedPlayerIds.some((playerId) => !classByPlayer[playerId]) ? "assign a class to each selected player" : null,
+  ].filter(Boolean) as string[];
+  const startChapterHint = startRequirements.length
+    ? `Before you can start the chapter, please ${startRequirements.join(", ")}.`
+    : "Ready to begin the adventure.";
 
   const transcriptChars = transcript.reduce((sum, event) => sum + event.text.length + 1, 0);
   const latestDraft = detail?.narrative_drafts.length ? detail.narrative_drafts[detail.narrative_drafts.length - 1] : null;
+
+  function displayAdventureTitle(adventure: Adventure | null) {
+    if (!adventure) return "";
+    return ADVENTURE_TITLE_OVERRIDES[adventure.adventure_id] ?? adventure.title;
+  }
+
+  function stopSpeechPlayback() {
+    speechAbortRef.current?.abort();
+    speechAbortRef.current = null;
+    if (speechAudioRef.current) {
+      speechAudioRef.current.pause();
+      speechAudioRef.current.currentTime = 0;
+      speechAudioRef.current.src = "";
+    }
+    if (speechObjectUrlRef.current) {
+      URL.revokeObjectURL(speechObjectUrlRef.current);
+      speechObjectUrlRef.current = null;
+    }
+    setTtsState("idle");
+  }
+
+  async function playReply(reply = latestEligibleReply) {
+    if (!reply || !reply.text.trim() || !sessionId) return;
+    const playerName = reply.agent_slot ? playerNameBySlot.get(reply.agent_slot) ?? "" : "";
+    if (!playerName) return;
+
+    stopSpeechPlayback();
+    const controller = new AbortController();
+    speechAbortRef.current = controller;
+    setTtsError("");
+    setTtsState("loading");
+
+    try {
+      const blob = await apiBlob(`/session/${sessionId}/tts`, {
+        method: "POST",
+        body: JSON.stringify({
+          text: reply.text,
+          player_name: playerName,
+        }),
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      const objectUrl = URL.createObjectURL(blob);
+      speechObjectUrlRef.current = objectUrl;
+      if (!speechAudioRef.current) {
+        speechAudioRef.current = new Audio();
+      }
+      speechAudioRef.current.volume = 1;
+      speechAudioRef.current.src = objectUrl;
+      await speechAudioRef.current.play();
+      setTtsState("playing");
+    } catch (e) {
+      if ((e as Error).name === "AbortError") {
+        return;
+      }
+      setTtsError((e as Error).message);
+      setTtsState("idle");
+    } finally {
+      if (speechAbortRef.current === controller) {
+        speechAbortRef.current = null;
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!latestEligibleReply?.event_id) return;
+    if (!ttsAutoPlay) {
+      autoPlayBaselineRef.current = latestEligibleReply.event_id;
+      return;
+    }
+    if (autoPlayBaselineRef.current === null) {
+      autoPlayBaselineRef.current = latestEligibleReply.event_id;
+      if (ttsState !== "idle") {
+        return;
+      }
+      void playReply(latestEligibleReply);
+      return;
+    }
+    if (latestEligibleReply.event_id === autoPlayBaselineRef.current) {
+      return;
+    }
+    autoPlayBaselineRef.current = latestEligibleReply.event_id;
+    if (ttsState !== "idle") {
+      return;
+    }
+    void playReply(latestEligibleReply);
+  }, [latestEligibleReply?.event_id, ttsAutoPlay, ttsState]);
+
+  function toggleTtsAutoPlay() {
+    setTtsAutoPlay((current) => {
+      const next = !current;
+      autoPlayBaselineRef.current = next ? latestEligibleReply?.event_id ?? null : latestEligibleReply?.event_id ?? null;
+      return next;
+    });
+  }
 
   function togglePlayer(playerId: string) {
     setSelectedPlayerIds((current) => {
@@ -455,7 +611,7 @@ export function App() {
   }
 
   async function resetChapter() {
-    if (!window.confirm("Reset the current MK2 session?")) return;
+    if (!window.confirm("Reset the current session?")) return;
     setLoading(true);
     try {
       await api(`/session/${sessionId}/reset`, { method: "POST" });
@@ -474,7 +630,7 @@ export function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `chapter-${sessionId || "mk2"}.txt`;
+    link.download = `chapter-${sessionId || "mk3"}.txt`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -482,22 +638,27 @@ export function App() {
   }
 
   if (!catalog || !detail) {
-    return <div className="loading-shell">Loading MK2 session...</div>;
+    return <div className="loading-shell">Loading Story Engine MK3...</div>;
   }
 
   return (
     <div className="page">
       <audio
         ref={audioRef}
-        src={MUSIC_TRACKS[trackIndex]}
+        key={currentTrack}
+        preload="metadata"
+        src={currentTrack}
+        onError={() => setError(`Unable to load music track: ${currentTrack}`)}
         onEnded={() => setTrackIndex((current) => (current + 1) % MUSIC_TRACKS.length)}
-      />
+      >
+        <source src={currentTrack} type="audio/mpeg" />
+      </audio>
       {!unlocked && (
         <div className="splash-overlay">
           <article className="splash-card">
-            <h1>Welcome to Story Engine MK2</h1>
+            <h1>Welcome to Story Engine MK3</h1>
             <p>
-              Story Engine MK2 is an experimental AI-powered tabletop adventure simulator. You act as the Game Master while a
+              Story Engine MK3 is an experimental AI-powered tabletop adventure simulator. You act as the Game Master while a
               party of AI-controlled players explores, fights, and roleplays through a dynamic fantasy scenario. The interface is
               organized into three tabs that guide the flow of play.
             </p>
@@ -521,9 +682,9 @@ export function App() {
             </p>
             <p>
               <strong>Quick Start</strong><br />
-              1. Configure your party and mission in Tab 1.<br />
-              2. Move to Tab 2 and begin the adventure by describing the opening scene.<br />
-              3. When the session ends, visit Tab 3 to create the written chronicle.
+              1. Configure your party and mission in Preparation.<br />
+              2. Move to Adventure and begin by describing the opening scene.<br />
+              3. When the session ends, visit Wrap Up to create the written chronicle.
             </p>
             <p>
               Experiment with different party combinations, missions, and GM prompts. The story engine will respond differently
@@ -545,9 +706,9 @@ export function App() {
       )}
       <header className="hero">
         <div>
-          <div className="eyebrow">Story Engine MK2</div>
+          <div className="eyebrow">Story Engine MK3</div>
           <h1 className="hero-title">Valaska Adventure Console</h1>
-          <p className="hero-copy">Preset-driven party setup, GM-first prompt loop, structured memory, initiative scaffolding, and chapter drafting.</p>
+          <p className="hero-copy">Guided party preparation, GM-first adventure play, and a cleaner wrap-up flow for first-time users.</p>
         </div>
         <div className="status-strip">
           <div className="status-card"><span>Session</span><strong>{sessionId}</strong></div>
@@ -569,9 +730,9 @@ export function App() {
       </header>
 
       <nav className="tabs">
-        <button className={tab === 1 ? "tab active" : "tab"} onClick={() => setTab(1)}>Tab1</button>
-        <button className={tab === 2 ? "tab active" : "tab"} onClick={() => setTab(2)} disabled={!detail.session.tab1_locked}>Tab2</button>
-        <button className={tab === 3 ? "tab active" : "tab"} onClick={() => setTab(3)} disabled={!detail.session.tab1_locked}>Tab3</button>
+        <button className={tab === 1 ? "tab active" : "tab"} onClick={() => setTab(1)}>Preparation</button>
+        <button className={tab === 2 ? "tab active" : "tab"} onClick={() => setTab(2)} disabled={!detail.session.tab1_locked}>Adventure</button>
+        <button className={tab === 3 ? "tab active" : "tab"} onClick={() => setTab(3)} disabled={!detail.session.tab1_locked}>Wrap Up</button>
       </nav>
 
       {error && <div className="error-banner">{error}</div>}
@@ -580,17 +741,17 @@ export function App() {
         <section className="panel">
           <div className="panel-grid panel-grid--tab1">
             <article className="card map-card">
-              <div className="card-head"><span>Cell 1</span><h2>Valaska Map</h2></div>
+              <div className="card-head"><span>Start Here</span><h2>Setting Map</h2></div>
               <img
                 className="media"
                 src={resolveApiUrl(adventurePickerOpen ? catalog.adventure_selection_image_url : catalog.map_image_url)}
                 alt="Valaska"
               />
-              <p className="card-copy">The setting is fixed to Valaska. Moosehearth is the starting town for every MK2 session.</p>
+              <p className="card-copy">The setting is fixed to Valaska. Moosehearth is the starting town for every session.</p>
             </article>
 
             <article className="card" onMouseEnter={() => setAdventurePickerOpen(true)} onMouseLeave={() => setAdventurePickerOpen(false)}>
-              <div className="card-head"><span>Cell 2</span><h2>Adventure Selection</h2></div>
+              <div className="card-head"><span>Choose A Mission</span><h2>Adventure Selection</h2></div>
               <div className="adventure-list">
                 {catalog.adventures.map((adventure) => (
                   <button
@@ -598,7 +759,7 @@ export function App() {
                     className={adventureId === adventure.adventure_id ? "adventure-card selected" : "adventure-card"}
                     onClick={() => setAdventureId(adventure.adventure_id)}
                   >
-                    <strong>{adventure.title}</strong>
+                    <strong>{displayAdventureTitle(adventure)}</strong>
                     <p>{adventure.description}</p>
                   </button>
                 ))}
@@ -606,7 +767,7 @@ export function App() {
             </article>
 
             <article className="card">
-              <div className="card-head"><span>Cell 3</span><h2>Player Picker</h2></div>
+              <div className="card-head"><span>Build The Party</span><h2>Player Selection</h2></div>
               <div className="player-grid">
                 {catalog.players.map((player) => {
                   const selected = selectedPlayerIds.includes(player.player_id);
@@ -622,14 +783,14 @@ export function App() {
             </article>
 
             <article className="card">
-              <div className="card-head"><span>Cell 4</span><h2>Assign Classes</h2></div>
+              <div className="card-head"><span>Finalize Loadouts</span><h2>Player Class Selection</h2></div>
               <div className="class-grid">
                 {selectedPlayerIds.map((playerId, index) => {
                   const player = catalog.players.find((entry) => entry.player_id === playerId)!;
                   const selectedClassId = classByPlayer[playerId] ?? "";
                   const portrait = detail.tab1.party.find((member) => member.player_id === playerId)?.portrait_url ?? player.image_url;
                   return (
-                    <div key={playerId} className="class-card">
+                    <div key={playerId} className={selectedClassId ? "class-card selected" : "class-card"}>
                       <img src={resolveApiUrl(selectedClassId ? portrait : player.image_url)} alt={player.name} />
                       <div>
                         <strong>{index + 1}. {player.name}</strong>
@@ -648,16 +809,21 @@ export function App() {
 
           {selectedAdventure && (
             <div className="summary-bar">
-              <strong>{selectedAdventure.title}</strong>
+              <strong>{displayAdventureTitle(selectedAdventure)}</strong>
               <span>{selectedAdventure.objectives.map((objective) => objective.description).join(" | ")}</span>
             </div>
           )}
 
           <div className="action-row">
             <button className="btn" onClick={() => void saveTab1()} disabled={loading}>Save Page</button>
-            {!detail.session.tab1_locked && <button className="btn accent" onClick={() => void startChapter()} disabled={loading || !startReady}>Start Chapter</button>}
+            {!detail.session.tab1_locked && (
+              <span className="button-tooltip-wrap" title={loading || startReady ? "" : startChapterHint}>
+                <button className="btn accent" onClick={() => void startChapter()} disabled={loading || !startReady}>Start Chapter</button>
+              </span>
+            )}
             {detail.session.tab1_locked && <button className="btn danger" onClick={() => void resetChapter()} disabled={loading}>Reset Chapter</button>}
           </div>
+          {!detail.session.tab1_locked && !startReady && <p className="inline-guidance">{startChapterHint}</p>}
         </section>
       )}
 
@@ -665,7 +831,24 @@ export function App() {
         <section className="panel">
           <div className="panel-grid panel-grid--top">
             <article className="card transcript-card">
-              <div className="card-head"><span>Cell 1</span><h2>Context Transcript</h2><small>{transcriptChars} chars</small></div>
+              <div className="card-head">
+                <span>Live Session</span>
+                <h2>Adventure Log</h2>
+                <small>{transcriptChars} chars</small>
+                <div className="card-head-actions">
+                  <span className={`tts-status tts-status--${ttsState}`}>AI Voice: {TTS_STATUS_LABELS[ttsState]}</span>
+                  <button className="btn btn-small" type="button" onClick={() => void playReply()} disabled={!latestEligibleReply || ttsState === "loading"}>
+                    Play
+                  </button>
+                  <button
+                    className={ttsAutoPlay ? "btn btn-small accent-toggle active" : "btn btn-small accent-toggle"}
+                    type="button"
+                    onClick={toggleTtsAutoPlay}
+                  >
+                    Auto Play: {ttsAutoPlay ? "On" : "Off"}
+                  </button>
+                </div>
+              </div>
               <div ref={transcriptRef} className="transcript-box transcript-box--tall">
                 {transcript.map((event) => (
                   <div
@@ -677,10 +860,11 @@ export function App() {
                   </div>
                 ))}
               </div>
+              {ttsError && <p className="inline-guidance">Voice playback error: {ttsError}</p>}
             </article>
 
             <article className="card image-card">
-              <div className="card-head"><span>Image Cell</span><h2>Scene Frame</h2></div>
+              <div className="card-head"><span>Current Scene</span><h2>Scene Frame</h2></div>
               {imageLoading ? (
                 <div className="media media-loading">Loading...</div>
               ) : (
@@ -693,7 +877,7 @@ export function App() {
           </div>
 
           <article className="card prompt-shell" style={{ borderColor: SLOT_COLORS[activeAgentSlot] ?? "var(--border-strong)" }}>
-            <div className="card-head"><span>Cell 2</span><h2>Prompting</h2></div>
+            <div className="card-head"><span>Guide The Party</span><h2>Game Master Prompting</h2></div>
             <div className="agent-tabs">
               {detail.tab1.party.map((member) => (
                 <button
@@ -717,7 +901,7 @@ export function App() {
           </article>
 
           <article className="card card-full-width">
-              <div className="card-head"><span>Cell 3</span><h2>Player Status</h2></div>
+              <div className="card-head"><span>Party Overview</span><h2>Player Status</h2></div>
               <div className="status-grid status-grid--row">
                 {detail.tab1.party.map((member) => (
                   <div key={member.slot} className="status-card-lg">
@@ -735,7 +919,7 @@ export function App() {
           </article>
 
           <article className="card card-full-width">
-              <div className="card-head"><span>Cell 4</span><h2>GM Notes</h2></div>
+              <div className="card-head"><span>Run The Encounter</span><h2>Game Master Screen</h2></div>
               <div className="objective-strip">
                 <strong>Adventure Completion Objectives</strong>
                 <ul className="objective-list">
@@ -766,12 +950,7 @@ export function App() {
       {tab === 3 && (
         <section className="panel">
           <article className="card">
-            <div className="card-head"><span>Cell 1</span><h2>Structured Memory</h2></div>
-            <pre className="memory-box">{detail.memory_blocks.map((block) => `${block.type} [${block.from_prompt_index}-${block.to_prompt_index}]\n${JSON.stringify(block.json_payload, null, 2)}`).join("\n\n")}</pre>
-          </article>
-
-          <article className="card">
-            <div className="card-head"><span>Cell 2</span><h2>Who would you like to Summerize your adventure?</h2></div>
+            <div className="card-head"><span>Choose The Voice</span><h2>Choose a Player to Summarize Your Adventure!</h2></div>
             <div className="lens-grid lens-grid--row">
               {detail.tab1.party.map((member) => (
                 <button key={member.player_id} className={selectedNarrativePlayerId === member.player_id ? "lens-card lens-card--compact selected" : "lens-card lens-card--compact"} onClick={() => setSelectedNarrativePlayerId(member.player_id)}>
@@ -789,7 +968,7 @@ export function App() {
           </article>
 
           <article className="card">
-            <div className="card-head"><span>Cell 3</span><h2>Chapter Draft</h2></div>
+            <div className="card-head"><span>Final Chronicle</span><h2>Player Summary of the Adventure</h2></div>
             <pre className="memory-box">{latestDraft?.chapter_text ?? ""}</pre>
             <div className="action-row">
               <button className="btn" onClick={downloadChapter} disabled={!(latestDraft?.chapter_text ?? "").trim()}>Download Chapter</button>

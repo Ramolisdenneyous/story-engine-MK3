@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: story
       POSTGRES_DB: story_engine
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
 
@@ -24,17 +24,19 @@ services:
       LLM_MODEL_SUMMARY: ${LLM_MODEL_SUMMARY:-gpt-4o-mini}
       LLM_MODEL_NARRATIVE: ${LLM_MODEL_NARRATIVE:-gpt-4o}
     ports:
-      - "8001:8000"
+      - "8002:8000"
     depends_on:
       - postgres
 
   frontend:
     build:
       context: ./frontend
+      args:
+        VITE_API_BASE: http://localhost:8002
     environment:
-      VITE_API_BASE: http://localhost:8001
+      VITE_API_BASE: http://localhost:8002
     ports:
-      - "5174:5173"
+      - "5175:5173"
     depends_on:
       - backend
 

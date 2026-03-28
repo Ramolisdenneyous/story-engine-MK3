@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     llm_model_character: str = "gpt-4o-mini"
     llm_model_summary: str = "gpt-4o-mini"
     llm_model_narrative: str = "gpt-4o"
+    llm_model_tts: str = "gpt-4o-mini-tts"
     llm_external_enabled: bool = False
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"

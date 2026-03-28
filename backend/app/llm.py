@@ -42,10 +42,12 @@ CHARACTER_SYSTEM_PROMPT = (
     "any other uncertain mechanic unless the GM explicitly states they will roll manually. Do not roleplay rolling "
     "dice, do not narrate grabbing dice, and do not invent results. When the GM asks you to roll a skill check, call "
     "the tool, add your modifier if any, report the rolled outcome to the user, and do NOT narrate the world outcome "
-    "of that roll. That outcome belongs to the GM. Attack rolls are the exception where you may state hit or miss if "
-    "the AC is known. When making an attack, use the batch dice tool so the attack roll and damage roll are both "
-    "executed in the same turn whenever possible. Include clear labels when calling tools and then continue your "
-    "response in the same message.\n\n"
+    "of that roll. That outcome belongs to the GM. When the Game Master asks for a skill check you MUST use the dice "
+    "roller tool and report the outcome, including the dice roll and the final total after adding the relevant skill "
+    "modifier. Never state or imply a skill check total unless it came from the tool. Attack rolls are the exception "
+    "where you may state hit or miss if the AC is known. When making an attack, use the batch dice tool so the attack "
+    "roll and damage roll are both executed in the same turn whenever possible. Include clear labels when calling "
+    "tools and then continue your response in the same message.\n\n"
     "STATE UPDATE TOOL POLICY\n"
     "You also have access to a state update tool. If the GM explicitly states that you took damage, recovered hit "
     "points, gained or lost a status condition, or gained or lost inventory, you MUST call the state update tool so "
@@ -85,6 +87,28 @@ IMAGE_SYSTEM_PROMPT = (
     "image prompt for the image generation API. Return only the final image prompt text."
 )
 
+TTS_PLAYER_VOICE_ALIASES = {
+    "Jannet": "lumen",
+    "Tammey": "lumen",
+    "Annie": "lumen",
+    "Sam": "verse",
+    "Joe": "sol",
+    "Rick": "sol",
+    "Tom": "sol",
+    "Beau": "nova",
+}
+
+# Preserve the requested MK3 voice identities while resolving unsupported aliases
+# to current OpenAI TTS voice names under the hood.
+TTS_OPENAI_VOICE_MAP = {
+    "verse": "verse",
+    "nova": "nova",
+    "lumen": "sage",
+    "ember": "coral",
+    "sol": "ash",
+    "alloy": "alloy",
+}
+
 
 class LLMProvider:
     provider_name = "base"
@@ -93,6 +117,9 @@ class LLMProvider:
         raise NotImplementedError
 
     def generate_image(self, prompt_text: str, reference_image_bytes: bytes | None = None) -> str:
+        raise NotImplementedError
+
+    def generate_speech(self, text: str, voice_alias: str) -> bytes:
         raise NotImplementedError
 
 
@@ -116,6 +143,9 @@ class MockLLMProvider(LLMProvider):
 
     def generate_image(self, prompt_text: str, reference_image_bytes: bytes | None = None) -> str:
         return "mock://generated-image"
+
+    def generate_speech(self, text: str, voice_alias: str) -> bytes:
+        raise RuntimeError("TTS is unavailable when using the mock provider")
 
 
 class OpenAIProvider(LLMProvider):
@@ -153,6 +183,25 @@ class OpenAIProvider(LLMProvider):
             if "b64_json" in item:
                 return f"data:image/png;base64,{item['b64_json']}"
             return item.get("url", "")
+
+    def generate_speech(self, text: str, voice_alias: str) -> bytes:
+        resolved_voice = TTS_OPENAI_VOICE_MAP.get(voice_alias, "alloy")
+        with httpx.Client(timeout=180.0) as client:
+            response = client.post(
+                f"{self.base_url}/audio/speech",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": settings.llm_model_tts,
+                    "voice": resolved_voice,
+                    "input": text,
+                    "format": "mp3",
+                },
+            )
+            response.raise_for_status()
+            return response.content
 
     def _chat(self, model: str, messages: list[dict[str, Any]], system_prompt: str, tools: list[dict[str, Any]] | None) -> str:
         chat_messages = [{"role": "system", "content": system_prompt}, *messages]
@@ -400,6 +449,10 @@ def update_player_state_tool(args: dict[str, Any]) -> dict[str, Any]:
             }
         )
     return {"target_slot": target_slot, "changes": normalized}
+
+
+def tts_voice_alias_for_player(player_name: str) -> str:
+    return TTS_PLAYER_VOICE_ALIASES.get(player_name, "alloy")
 
 
 def get_provider() -> LLMProvider:

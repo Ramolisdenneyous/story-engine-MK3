@@ -144,8 +144,14 @@ button, input, textarea, select { font: inherit; }
   color: #08111d;
 }
 
+.btn-small {
+  padding: 10px 14px;
+  font-size: 12px;
+}
+
 .btn.accent { background: linear-gradient(135deg, var(--accent-2), #ffc480); }
 .btn.danger { background: linear-gradient(135deg, var(--danger), #ffafbe); }
+.accent-toggle.active { background: linear-gradient(135deg, var(--accent-2), #ffc480); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .panel {
@@ -182,6 +188,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .card-head h2 { margin: 0; font-size: 1.2rem; }
 .card-copy { margin: 0; color: var(--text-muted); line-height: 1.5; }
+.card-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
 
 .media {
   width: 100%;
@@ -222,7 +235,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .adventure-card.selected, .player-tile.selected, .lens-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(113, 183, 255, 0.4) inset;
+  background: linear-gradient(180deg, rgba(113, 183, 255, 0.2), rgba(255, 255, 255, 0.06));
+  box-shadow:
+    0 0 0 2px rgba(113, 183, 255, 0.65) inset,
+    0 18px 36px rgba(12, 21, 33, 0.32);
+  transform: translateY(-2px);
+}
+
+.class-card.selected {
+  border-color: var(--accent-2);
+  background: linear-gradient(180deg, rgba(255, 156, 93, 0.18), rgba(255, 255, 255, 0.05));
+  box-shadow:
+    0 0 0 2px rgba(255, 156, 93, 0.5) inset,
+    0 18px 36px rgba(12, 21, 33, 0.28);
 }
 
 .adventure-card p, .monster-card p { margin: 8px 0 0; color: var(--text-muted); line-height: 1.5; }
@@ -277,6 +302,37 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: rgba(255,255,255,0.04);
 }
 .summary-bar span { color: var(--text-muted); }
+
+.button-tooltip-wrap {
+  display: inline-flex;
+}
+
+.inline-guidance {
+  margin: -6px 0 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.tts-status {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  font: 700 12px/1 "Trebuchet MS", sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tts-status--loading {
+  border-color: rgba(255, 156, 93, 0.5);
+  color: #ffd7bc;
+}
+
+.tts-status--playing {
+  border-color: rgba(113, 183, 255, 0.55);
+  color: #d6ecff;
+}
 
 .transcript-box, .memory-box {
   min-height: 280px;
