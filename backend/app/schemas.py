@@ -48,12 +48,23 @@ class ObjectiveOut(BaseModel):
     status: str
 
 
+class AdventureLocationOut(BaseModel):
+    id: str
+    number: int
+    title: str
+    description: str
+    x_pct: float
+    y_pct: float
+
+
 class AdventureOut(BaseModel):
     adventure_id: str
     title: str
     description: str
     objectives: list[ObjectiveOut]
     monsters: list[str]
+    map_image_url: str
+    locations: list[AdventureLocationOut]
 
 
 class Tab1InputResponse(BaseModel):
@@ -76,6 +87,24 @@ class CombatStateOut(BaseModel):
     initiative_values: dict[str, int]
 
 
+class OppositionMonsterInstanceOut(BaseModel):
+    monster_id: str
+    display_name: str
+    current_hp: int
+    hp_max: int
+    is_dead: bool
+    status_effects: list[str]
+
+
+class OppositionStateOut(BaseModel):
+    active: bool
+    group_id: str
+    initiative_id: str
+    monster_type: str
+    monster_stats: dict
+    instances: list[OppositionMonsterInstanceOut]
+
+
 class SessionSummary(BaseModel):
     session_id: str
     state: SessionState
@@ -84,11 +113,23 @@ class SessionSummary(BaseModel):
     tab1_locked: bool
     combat_state: CombatStateOut
     selected_narrative_player_id: str
+    opposition_state: OppositionStateOut | None = None
 
 
 class PromptRequest(BaseModel):
     agent_slot: int
     user_text: str
+
+
+class TravelRequest(BaseModel):
+    location_id: str
+    location_name: str
+    location_description: str
+
+
+class OppositionSpawnRequest(BaseModel):
+    monster_type: str
+    quantity: int = Field(ge=1, le=4)
 
 
 class EventOut(BaseModel):
@@ -181,6 +222,7 @@ class MonsterReferenceOut(BaseModel):
     hp: int
     attack_bonus: int
     attack_text: str
+    image_url: str
 
 
 class CatalogResponse(BaseModel):

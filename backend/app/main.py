@@ -19,11 +19,13 @@ from .schemas import (
     MonsterReferenceOut,
     NarrativeAgentRequest,
     NarrativeBuildResponse,
+    OppositionSpawnRequest,
     PromptRequest,
     PromptResponse,
     SessionCreateResponse,
     SessionDetailResponse,
     SessionSummary,
+    TravelRequest,
     TTSRequest,
     Tab1InputPayload,
     Tab1InputResponse,
@@ -32,6 +34,7 @@ from .services import (
     asset_url,
     build_narrative,
     create_session,
+    dismiss_opposition,
     end_chapter,
     generate_scene_image,
     get_session_detail,
@@ -43,7 +46,12 @@ from .services import (
     roll_initiative,
     save_narrative_agent,
     save_tab1,
+    serialize_adventure,
+    serialize_monster_reference,
+    spawn_opposition,
     synthesize_player_reply_tts,
+    take_long_rest,
+    travel_to_location,
 )
 
 app = FastAPI(title="Story Engine MK2", version="2.0.0")
@@ -69,7 +77,9 @@ def _ensure_schema() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
         statements = [
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS current_location_text TEXT DEFAULT '' NOT NULL",
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS combat_state JSON DEFAULT '{}' NOT NULL",
+            "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS opposition_state JSON DEFAULT '{}' NOT NULL",
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS generated_image JSON DEFAULT '{}' NOT NULL",
             "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS selected_narrative_player_id VARCHAR(120) DEFAULT '' NOT NULL",
             "ALTER TABLE tab1_inputs ADD COLUMN IF NOT EXISTS preset_id VARCHAR(120) DEFAULT '' NOT NULL",
@@ -80,6 +90,17 @@ def _ensure_schema() -> None:
             "ALTER TABLE events ADD COLUMN IF NOT EXISTS json_payload JSON DEFAULT '{}' NOT NULL",
         ]
         for statement in statements:
+            try:
+                conn.execute(text(statement))
+            except Exception:
+                pass
+        enum_statements = [
+            "ALTER TYPE eventkind ADD VALUE IF NOT EXISTS 'HP_CHANGED'",
+            "ALTER TYPE eventkind ADD VALUE IF NOT EXISTS 'OPPOSITION_SPAWNED'",
+            "ALTER TYPE eventkind ADD VALUE IF NOT EXISTS 'MONSTER_DIED'",
+            "ALTER TYPE eventkind ADD VALUE IF NOT EXISTS 'OPPOSITION_DISMISSED'",
+        ]
+        for statement in enum_statements:
             try:
                 conn.execute(text(statement))
             except Exception:
@@ -105,6 +126,7 @@ def _session_summary(session) -> SessionSummary:
         tab1_locked=session.tab1_locked,
         combat_state=CombatStateOut(**(session.combat_state or {"in_combat": False, "round": 1, "turn_index": 0, "initiative_order": [], "initiative_values": {}})),
         selected_narrative_player_id=session.selected_narrative_player_id or "",
+        opposition_state=(session.opposition_state or None),
     )
 
 
@@ -132,7 +154,7 @@ def get_catalog():
         map_image_url=asset_url(MAP_IMAGE_FILE),
         adventure_selection_image_url=asset_url(ADVENTURE_SELECTION_IMAGE_FILE),
         default_image_url=asset_url(DEFAULT_IMAGE_FILE),
-        adventures=list(ADVENTURES.values()),
+        adventures=[serialize_adventure(adventure_id) for adventure_id in ADVENTURES.keys()],
         players=[
             {
                 "player_id": player["player_id"],
@@ -157,7 +179,7 @@ def get_catalog():
             }
             for cls in CLASSES.values()
         ],
-        monsters=[MonsterReferenceOut(**monster) for monster in MONSTERS.values()],
+        monsters=[MonsterReferenceOut(**serialize_monster_reference(monster_id)) for monster_id in sorted(MONSTERS.keys())],
     )
 
 
@@ -202,6 +224,32 @@ def prompt_endpoint(session_id: str, payload: PromptRequest, db: Session = Depen
             agent_event=agent_event,
             summary_triggered=summary_triggered,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/session/{session_id}/travel", response_model=SessionSummary)
+def travel_endpoint(session_id: str, payload: TravelRequest, db: Session = Depends(get_db)):
+    try:
+        return _session_summary(
+            travel_to_location(db, session_id, payload.location_id, payload.location_name, payload.location_description)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/session/{session_id}/spawn-opposition", response_model=SessionSummary)
+def spawn_opposition_endpoint(session_id: str, payload: OppositionSpawnRequest, db: Session = Depends(get_db)):
+    try:
+        return _session_summary(spawn_opposition(db, session_id, payload.monster_type, payload.quantity))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/session/{session_id}/dismiss-opposition", response_model=SessionSummary)
+def dismiss_opposition_endpoint(session_id: str, db: Session = Depends(get_db)):
+    try:
+        return _session_summary(dismiss_opposition(db, session_id))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -252,6 +300,14 @@ def roll_initiative_endpoint(session_id: str, db: Session = Depends(get_db)):
     try:
         result = roll_initiative(db, session_id)
         return InitiativeResponse(combat_state=CombatStateOut(**result["combat_state"]), rolls=[DiceRollResult(**roll) for roll in result["rolls"]])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/session/{session_id}/long-rest", response_model=SessionSummary)
+def long_rest_endpoint(session_id: str, db: Session = Depends(get_db)):
+    try:
+        return _session_summary(take_long_rest(db, session_id))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

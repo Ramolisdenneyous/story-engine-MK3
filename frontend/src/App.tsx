@@ -21,6 +21,17 @@ type Adventure = {
   description: string;
   objectives: Array<{ id: string; description: string; status: string }>;
   monsters: string[];
+  map_image_url: string;
+  locations: AdventureLocation[];
+};
+
+type AdventureLocation = {
+  id: string;
+  number: number;
+  title: string;
+  description: string;
+  x_pct: number;
+  y_pct: number;
 };
 
 type PlayerCatalog = {
@@ -49,6 +60,7 @@ type Monster = {
   hp: number;
   attack_bonus: number;
   attack_text: string;
+  image_url: string;
 };
 
 type CombatState = {
@@ -57,6 +69,24 @@ type CombatState = {
   turn_index: number;
   initiative_order: string[];
   initiative_values: Record<string, number>;
+};
+
+type OppositionMonsterInstance = {
+  monster_id: string;
+  display_name: string;
+  current_hp: number;
+  hp_max: number;
+  is_dead: boolean;
+  status_effects: string[];
+};
+
+type OppositionState = {
+  active: boolean;
+  group_id: string;
+  initiative_id: string;
+  monster_type: string;
+  monster_stats: Record<string, unknown>;
+  instances: OppositionMonsterInstance[];
 };
 
 type PartyMember = {
@@ -86,6 +116,7 @@ type SessionDetail = {
     tab1_locked: boolean;
     combat_state: CombatState;
     selected_narrative_player_id: string;
+    opposition_state?: OppositionState | null;
   };
   tab1: {
     preset_id: string;
@@ -125,7 +156,9 @@ const SLOT_COLORS: Record<number, string> = {
   2: "#ff9e4a",
   3: "#f4cf59",
   4: "#60d48f",
+  12: "#69b7ff",
 };
+const OPPOSITION_SLOT = 12;
 
 const MUSIC_TRACKS = [
   "Citadel of Rusted Banners (1).mp3",
@@ -149,10 +182,40 @@ const TTS_STATUS_LABELS = {
   playing: "Playing",
 } as const;
 
+function sanitizeVisibleAgentText(text: string) {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (/^(TOOL_DICE_ROLL|COMBAT_STATE_CHANGE):/i.test(trimmed)) return false;
+      if (/^(resolve_action|update_inventory|update_combat_state|roll_dice|roll_dice_batch)\s*[:(]/i.test(trimmed)) return false;
+      if (/^\{.*\}$/.test(trimmed) && /"(target_type|target_id|changes|formula|rolls|actor_id|action_type|ability|actions|results|healing|damage)"/.test(trimmed)) return false;
+      return true;
+    })
+    .join("\n")
+    .trim();
+}
+
+const MUSIC_VOLUME = 0.1;
+const TTS_PLAYER_GAIN: Record<string, number> = {
+  Beau: 1,
+  Joe: 1,
+  Annie: 1.05,
+  Rick: 1.05,
+  Sam: 1.05,
+  Tom: 1.05,
+  Tammey: 1.35,
+  Jannet: 1.35,
+};
+
 export function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const speechAudioRef = useRef<HTMLAudioElement | null>(null);
+  const speechAudioContextRef = useRef<AudioContext | null>(null);
+  const speechGainNodeRef = useRef<GainNode | null>(null);
+  const speechSourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const speechObjectUrlRef = useRef<string | null>(null);
   const speechAbortRef = useRef<AbortController | null>(null);
   const autoPlayBaselineRef = useRef<string | null>(null);
@@ -161,6 +224,8 @@ export function App() {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [tab, setTab] = useState<1 | 2 | 3>(1);
   const [loading, setLoading] = useState(false);
+  const [chapterStarting, setChapterStarting] = useState(false);
+  const [chapterLoadingFrame, setChapterLoadingFrame] = useState(0);
   const [imageLoading, setImageLoading] = useState(false);
   const [narrativeBuilding, setNarrativeBuilding] = useState(false);
   const [error, setError] = useState("");
@@ -176,13 +241,18 @@ export function App() {
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([]);
   const [classByPlayer, setClassByPlayer] = useState<Record<string, string>>({});
   const [activeAgentSlot, setActiveAgentSlot] = useState(1);
+  const [activeMonsterCardIndex, setActiveMonsterCardIndex] = useState(0);
+  const [activeLocationId, setActiveLocationId] = useState("");
   const [userPrompt, setUserPrompt] = useState("");
-  const [diceFormula, setDiceFormula] = useState("1d20");
-  const [diceResult, setDiceResult] = useState("");
   const [selectedNarrativePlayerId, setSelectedNarrativePlayerId] = useState("");
   const [ttsAutoPlay, setTtsAutoPlay] = useState(false);
   const [ttsState, setTtsState] = useState<"idle" | "loading" | "playing">("idle");
   const [ttsError, setTtsError] = useState("");
+  const [travelLoading, setTravelLoading] = useState(false);
+  const [longRestLoading, setLongRestLoading] = useState(false);
+  const [oppositionQuantity, setOppositionQuantity] = useState(1);
+  const [spawnLoading, setSpawnLoading] = useState(false);
+  const [dismissLoading, setDismissLoading] = useState(false);
 
   async function boot() {
     setLoading(true);
@@ -224,7 +294,9 @@ export function App() {
 
   const transcript = useMemo(() => {
     if (!detail) return [];
-    return detail.events.filter((event) => event.kind === "transcript");
+    return detail.events
+      .filter((event) => event.kind === "transcript")
+      .map((event) => ({ ...event, text: sanitizeVisibleAgentText(event.text) }));
   }, [detail]);
   const latestEligibleReply = useMemo(() => {
     for (let index = transcript.length - 1; index >= 0; index -= 1) {
@@ -257,6 +329,9 @@ export function App() {
       speechAudio.pause();
       speechAudio.removeEventListener("ended", onEnded);
       speechAudio.removeEventListener("pause", onPause);
+      speechSourceNodeRef.current?.disconnect();
+      speechGainNodeRef.current?.disconnect();
+      void speechAudioContextRef.current?.close();
       speechAbortRef.current?.abort();
       if (speechObjectUrlRef.current) {
         URL.revokeObjectURL(speechObjectUrlRef.current);
@@ -268,7 +343,7 @@ export function App() {
     const audio = audioRef.current;
     if (!audio) return;
     audio.load();
-    audio.volume = 0.18;
+    audio.volume = MUSIC_VOLUME;
     audio.muted = musicMuted;
     if (musicPlaying) {
       void audio.play().catch(() => {
@@ -278,6 +353,17 @@ export function App() {
       audio.pause();
     }
   }, [trackIndex, musicPlaying, musicMuted]);
+
+  useEffect(() => {
+    if (!chapterStarting) {
+      setChapterLoadingFrame(0);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setChapterLoadingFrame((current) => current + 1);
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [chapterStarting]);
 
   async function toggleMusicPlayback() {
     const audio = audioRef.current;
@@ -333,11 +419,33 @@ export function App() {
 
   const transcriptChars = transcript.reduce((sum, event) => sum + event.text.length + 1, 0);
   const latestDraft = detail?.narrative_drafts.length ? detail.narrative_drafts[detail.narrative_drafts.length - 1] : null;
+  const gmMonsters = detail?.gm_monsters ?? [];
+  const activeMonsterCard = gmMonsters[activeMonsterCardIndex] ?? null;
+  const oppositionState = detail?.session.opposition_state ?? null;
+  const activeOpposition = oppositionState?.active ? oppositionState : null;
+  const activeOppositionInstances = activeOpposition?.instances ?? [];
+  const adventureLocations = detail?.tab1.active_adventure?.locations ?? [];
+  const activeLocation =
+    adventureLocations.find((location) => location.id === activeLocationId) ??
+    adventureLocations[0] ??
+    null;
+  const loadingPulse = [".", "..", "..."][chapterLoadingFrame % 3];
+  const activeMonsterCardInstances =
+    activeOpposition && activeMonsterCard?.monster_id === activeOpposition.monster_type ? activeOppositionInstances : [];
 
   function displayAdventureTitle(adventure: Adventure | null) {
     if (!adventure) return "";
     return ADVENTURE_TITLE_OVERRIDES[adventure.adventure_id] ?? adventure.title;
   }
+
+  useEffect(() => {
+    setActiveMonsterCardIndex(0);
+  }, [detail?.tab1.adventure_id]);
+
+  useEffect(() => {
+    const firstLocationId = detail?.tab1.active_adventure?.locations?.[0]?.id ?? "";
+    setActiveLocationId(firstLocationId);
+  }, [detail?.tab1.adventure_id]);
 
   function stopSpeechPlayback() {
     speechAbortRef.current?.abort();
@@ -354,9 +462,34 @@ export function App() {
     setTtsState("idle");
   }
 
+  async function ensureSpeechGainChain() {
+    if (!speechAudioRef.current) {
+      speechAudioRef.current = new Audio();
+    }
+    if (!speechAudioContextRef.current) {
+      speechAudioContextRef.current = new AudioContext();
+    }
+    if (!speechGainNodeRef.current) {
+      speechGainNodeRef.current = speechAudioContextRef.current.createGain();
+      speechGainNodeRef.current.connect(speechAudioContextRef.current.destination);
+    }
+    if (!speechSourceNodeRef.current) {
+      speechSourceNodeRef.current = speechAudioContextRef.current.createMediaElementSource(speechAudioRef.current);
+      speechSourceNodeRef.current.connect(speechGainNodeRef.current);
+    }
+    if (speechAudioContextRef.current.state === "suspended") {
+      await speechAudioContextRef.current.resume();
+    }
+  }
+
   async function playReply(reply = latestEligibleReply) {
     if (!reply || !reply.text.trim() || !sessionId) return;
-    const playerName = reply.agent_slot ? playerNameBySlot.get(reply.agent_slot) ?? "" : "";
+    const playerName =
+      reply.agent_slot === OPPOSITION_SLOT
+        ? "Opposition"
+        : reply.agent_slot
+          ? playerNameBySlot.get(reply.agent_slot) ?? ""
+          : "";
     if (!playerName) return;
 
     stopSpeechPlayback();
@@ -379,6 +512,10 @@ export function App() {
       speechObjectUrlRef.current = objectUrl;
       if (!speechAudioRef.current) {
         speechAudioRef.current = new Audio();
+      }
+      await ensureSpeechGainChain();
+      if (speechGainNodeRef.current) {
+        speechGainNodeRef.current.gain.value = TTS_PLAYER_GAIN[playerName] ?? 1;
       }
       speechAudioRef.current.volume = 1;
       speechAudioRef.current.src = objectUrl;
@@ -480,6 +617,7 @@ export function App() {
   }
 
   async function startChapter() {
+    setChapterStarting(true);
     await saveTab1();
     setLoading(true);
     try {
@@ -489,6 +627,7 @@ export function App() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      setChapterStarting(false);
       setLoading(false);
     }
   }
@@ -498,7 +637,11 @@ export function App() {
     if (!currentDetail) return [1, 2, 3, 4];
     if (currentDetail.session.combat_state.in_combat) {
       return currentDetail.session.combat_state.initiative_order
-        .map((item) => Number(item.replace("pc:", "")))
+        .map((item) => {
+          if (item === "opp:12") return OPPOSITION_SLOT;
+          if (item.startsWith("pc:")) return Number(item.replace("pc:", ""));
+          return Number(item);
+        })
         .filter((slot) => Number.isFinite(slot));
     }
     return currentDetail.tab1.selected_agent_slots;
@@ -551,22 +694,6 @@ export function App() {
     }
   }
 
-  async function rollDice() {
-    setLoading(true);
-    try {
-      const result = await api<{ total: number; rolls: number[]; formula: string }>(`/session/${sessionId}/roll-dice`, {
-        method: "POST",
-        body: JSON.stringify({ formula: diceFormula, label: `GM roll: ${diceFormula}`, roller_id: "GM" }),
-      });
-      setDiceResult(`${result.formula}: ${result.rolls.join(", ")} = ${result.total}`);
-      await refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function generateImage() {
     setImageLoading(true);
     setError("");
@@ -577,6 +704,79 @@ export function App() {
       setError((e as Error).message);
     } finally {
       setImageLoading(false);
+    }
+  }
+
+  async function takeLongRest() {
+    if (!sessionId) return;
+    setLongRestLoading(true);
+    setError("");
+    try {
+      await api(`/session/${sessionId}/long-rest`, { method: "POST" });
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLongRestLoading(false);
+    }
+  }
+
+  async function travelToSelectedLocation() {
+    if (!sessionId || !activeLocation) return;
+    setTravelLoading(true);
+    setError("");
+    try {
+      await api(`/session/${sessionId}/travel`, {
+        method: "POST",
+        body: JSON.stringify({
+          location_id: activeLocation.id,
+          location_name: activeLocation.title,
+          location_description: activeLocation.description,
+        }),
+      });
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTravelLoading(false);
+    }
+  }
+
+  async function spawnOpposition() {
+    if (!sessionId || !activeMonsterCard) return;
+    setSpawnLoading(true);
+    setError("");
+    try {
+      await api(`/session/${sessionId}/spawn-opposition`, {
+        method: "POST",
+        body: JSON.stringify({
+          monster_type: activeMonsterCard.monster_id,
+          quantity: oppositionQuantity,
+        }),
+      });
+      await refresh();
+      setActiveAgentSlot(OPPOSITION_SLOT);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSpawnLoading(false);
+    }
+  }
+
+  async function dismissOpposition() {
+    if (!sessionId) return;
+    setDismissLoading(true);
+    setError("");
+    try {
+      await api(`/session/${sessionId}/dismiss-opposition`, { method: "POST" });
+      await refresh();
+      if (activeAgentSlot === OPPOSITION_SLOT) {
+        setActiveAgentSlot(1);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDismissLoading(false);
     }
   }
 
@@ -823,6 +1023,7 @@ export function App() {
             )}
             {detail.session.tab1_locked && <button className="btn danger" onClick={() => void resetChapter()} disabled={loading}>Reset Chapter</button>}
           </div>
+          {chapterStarting && <p className="chapter-loading-notice">Adventure Loading{loadingPulse}</p>}
           {!detail.session.tab1_locked && !startReady && <p className="inline-guidance">{startChapterHint}</p>}
         </section>
       )}
@@ -889,12 +1090,31 @@ export function App() {
                   {member.player_name} {member.initiative ? `(${member.initiative})` : ""}
                 </button>
               ))}
+              {activeOpposition && (
+                <button
+                  key={OPPOSITION_SLOT}
+                  className={activeAgentSlot === OPPOSITION_SLOT ? "agent-chip active" : "agent-chip"}
+                  style={{ background: activeAgentSlot === OPPOSITION_SLOT ? SLOT_COLORS[OPPOSITION_SLOT] : "transparent", borderColor: SLOT_COLORS[OPPOSITION_SLOT] }}
+                  onClick={() => setActiveAgentSlot(OPPOSITION_SLOT)}
+                >
+                  Opposition {detail.session.combat_state.initiative_values["opp:12"] ? `(${detail.session.combat_state.initiative_values["opp:12"]})` : ""}
+                </button>
+              )}
             </div>
             <form onSubmit={submitPrompt} className="prompt-form">
               <textarea value={userPrompt} onChange={(e) => setUserPrompt(e.target.value)} placeholder="GM prompt..." disabled={detail.session.state !== "ACTIVE"} />
               <div className="action-row">
                 <button className="btn" type="submit" disabled={loading || detail.session.state !== "ACTIVE"}>Send Prompt</button>
                 <button className="btn accent" type="button" onClick={() => void rollInitiative()} disabled={loading}>Roll for Initiative</button>
+                <button
+                  className="btn accent"
+                  type="button"
+                  onClick={() => void takeLongRest()}
+                  disabled={longRestLoading || Boolean(activeOpposition) || detail.session.state !== "ACTIVE"}
+                  title={activeOpposition ? "You cannot take a long rest while monsters are nearby." : ""}
+                >
+                  {longRestLoading ? "Resting..." : "Long Rest"}
+                </button>
                 <button className="btn accent" type="button" onClick={() => void generateImage()} disabled={imageLoading}>Generate Image</button>
               </div>
             </form>
@@ -928,21 +1148,115 @@ export function App() {
                   ))}
                 </ul>
               </div>
-              <div className="monster-strip">
-                {detail.gm_monsters.map((monster) => (
-                  <div key={monster.monster_id} className="monster-card">
-                    <strong>{monster.monster_id}</strong>
-                    <span>AC {monster.ac} | HP {monster.hp}</span>
-                    <span>Atk +{monster.attack_bonus}</span>
-                    <p>{monster.attack_text}</p>
-                  </div>
-                ))}
+              <div className="gm-screen-layout">
+                <div className="gm-map-panel">
+                  <div className="gm-screen-label">Adventure Map</div>
+                  {detail.tab1.active_adventure ? (
+                    <>
+                      <div className="gm-map-frame">
+                        <img
+                          className="gm-map-image"
+                          src={resolveApiUrl(detail.tab1.active_adventure.map_image_url)}
+                          alt={`${displayAdventureTitle(detail.tab1.active_adventure)} map`}
+                        />
+                        {adventureLocations.map((location) => (
+                          <button
+                            key={location.id}
+                            type="button"
+                            className={activeLocation?.id === location.id ? "gm-map-hotspot active" : "gm-map-hotspot"}
+                            style={{ left: `${location.x_pct}%`, top: `${location.y_pct}%` }}
+                            onClick={() => setActiveLocationId(location.id)}
+                            aria-label={`Location ${location.number}: ${location.title}`}
+                          >
+                            {location.number}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="gm-location-panel">
+                        {activeLocation ? (
+                          <>
+                            <div className="gm-location-header">
+                              <div className="gm-location-heading">
+                                <span>Location {activeLocation.number}</span>
+                                <strong>{activeLocation.title}</strong>
+                              </div>
+                              <button className="btn accent" type="button" onClick={() => void travelToSelectedLocation()} disabled={travelLoading}>
+                                {travelLoading ? "Traveling..." : "Travel"}
+                              </button>
+                            </div>
+                            <p>{activeLocation.description}</p>
+                          </>
+                        ) : (
+                          <p>Select a keyed location on the map.</p>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="gm-map-empty">Select an adventure to load its map.</div>
+                  )}
+                </div>
+                <div className="gm-monster-panel">
+                  <div className="gm-screen-label">Monster Deck</div>
+                  {activeMonsterCard ? (
+                    <div className="gm-monster-card-viewer">
+                      <div className="gm-opposition-controls">
+                        <div className="gm-opposition-spawn">
+                          <label>
+                            Spawn Opposition
+                            <select value={oppositionQuantity} onChange={(e) => setOppositionQuantity(Number(e.target.value))}>
+                              {[1, 2, 3, 4].map((count) => (
+                                <option key={count} value={count}>{count}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <button className="btn accent" type="button" onClick={() => void spawnOpposition()} disabled={spawnLoading || Boolean(activeOpposition)}>
+                            {spawnLoading ? "Spawning..." : activeOpposition ? "Opposition Active" : `Spawn ${activeMonsterCard.monster_id}`}
+                          </button>
+                        </div>
+                        {activeOpposition && (
+                          <button className="btn danger" type="button" onClick={() => void dismissOpposition()} disabled={dismissLoading}>
+                            {dismissLoading ? "Dismissing..." : "Dismiss Opposition"}
+                          </button>
+                        )}
+                      </div>
+                      <div className="gm-monster-card">
+                        <strong>{activeMonsterCard.monster_id}</strong>
+                        <img src={resolveApiUrl(activeMonsterCard.image_url)} alt={activeMonsterCard.monster_id} />
+                        {activeMonsterCardInstances.length > 0 && (
+                          <div className="gm-monster-instance-list">
+                            {activeMonsterCardInstances.map((instance) => (
+                              <div key={instance.monster_id} className={instance.is_dead ? "gm-monster-instance dead" : "gm-monster-instance"}>
+                                {instance.display_name} — {instance.current_hp}/{instance.hp_max} {instance.is_dead ? "DEAD" : ""}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="gm-monster-card-controls">
+                        <button
+                          className="btn"
+                          type="button"
+                          onClick={() => setActiveMonsterCardIndex((current) => (current - 1 + gmMonsters.length) % gmMonsters.length)}
+                          disabled={gmMonsters.length <= 1}
+                        >
+                          Previous
+                        </button>
+                        <span>{activeMonsterCardIndex + 1} / {gmMonsters.length}</span>
+                        <button
+                          className="btn"
+                          type="button"
+                          onClick={() => setActiveMonsterCardIndex((current) => (current + 1) % gmMonsters.length)}
+                          disabled={gmMonsters.length <= 1}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="gm-map-empty">No monsters are assigned to this adventure yet.</div>
+                  )}
+                </div>
               </div>
-              <div className="dice-box">
-                <input value={diceFormula} onChange={(e) => setDiceFormula(e.target.value)} placeholder="1d20+3" />
-                <button className="btn" onClick={() => void rollDice()} disabled={loading}>Roll Dice</button>
-              </div>
-              {diceResult && <p className="dice-result">{diceResult}</p>}
           </article>
         </section>
       )}

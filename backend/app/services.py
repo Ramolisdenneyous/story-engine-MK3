@@ -1,9 +1,13 @@
 import copy
+import json
+import logging
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from secrets import randbelow
+from typing import Any
 
 import httpx
 from sqlalchemy import delete, select
@@ -15,6 +19,7 @@ from .game_data import (
     CLASSES,
     DEFAULT_IMAGE_FILE,
     MONSTERS,
+    MONSTER_CATALOG,
     PLAYER_NARRATIVE_LENSES,
     PLAYERS,
     VALASKA_PRESET_ID,
@@ -24,10 +29,15 @@ from .llm import get_provider, log_artifact, tts_voice_alias_for_player
 from .models import Event, EventKind, EventRole, MemoryBlock, MemoryBlockType, NarrativeDraft, Session as SessionModel, SessionState, Tab1Inputs
 
 DICE_RE = re.compile(r"^\s*(\d{1,3})\s*d\s*(4|6|8|10|12|20)\s*([+-]\s*\d+)?\s*$", re.IGNORECASE)
-MARKER_RE = re.compile(r"^(DAMAGE_TAKEN|HEALING_RECEIVED|STATUS_GAINED|STATUS_LOST|INVENTORY_GAINED|INVENTORY_LOST):\s*(.+)$")
+COMBAT_STATE_MARKER_RE = re.compile(r"^COMBAT_STATE_CHANGE:\s*(\{.+\})$")
+TOOL_DICE_ROLL_MARKER_RE = re.compile(r"^TOOL_DICE_ROLL:\s*(\{.+\})$")
 VALID_DICE_SIDES = {4, 6, 8, 10, 12, 20}
 SLOT_COLORS = {1: "red", 2: "orange", 3: "yellow", 4: "green"}
 ASSET_DIR = Path("/app/docs/images")
+OPPOSITION_AGENT_SLOT = 12
+OPPOSITION_INITIATIVE_ID = "opp:12"
+OPPOSITION_DISPLAY_NAME = "Opposition"
+MONSTER_INSTANCE_LABELS = ["Monster-One", "Monster-Two", "Monster-Three", "Monster-Four"]
 OPENING_TRANSCRIPT = (
     "Welcome to Valaska, the bitter north at the very edge of the known world. Endless forests of black pine stretch beneath "
     "iron-gray skies, and the wind carries the bite of distant glaciers.\n\n"
@@ -38,6 +48,18 @@ OPENING_TRANSCRIPT = (
     "parchment is still stiff from the cold, promising coin, danger, and opportunity somewhere out in the frozen wilds.\n\n"
     "Adventure calls."
 )
+LONG_REST_TRANSCRIPT = (
+    "[SYSTEM EVENT: LONG REST - 8 HOURS]\n"
+    "Time passes, and the party manages 8 hours of rest.\n"
+    "The immediate danger has faded, and the party is given a rare chance to recover. "
+    "The hours stretch on. Armor is loosened. Weapons are cleaned. Breath slows. Thoughts settle.\n"
+    "By the end of the rest:\n"
+    "Your body has recovered\n"
+    "Your strength has returned\n"
+    "You are ready to continue"
+)
+
+logger = logging.getLogger("uvicorn.error")
 
 
 def _empty_combat_state() -> dict:
@@ -50,6 +72,29 @@ def _empty_combat_state() -> dict:
     }
 
 
+def _empty_opposition_state() -> dict:
+    return {
+        "active": False,
+        "group_id": "",
+        "initiative_id": OPPOSITION_INITIATIVE_ID,
+        "monster_type": "",
+        "monster_stats": {},
+        "instances": [],
+    }
+
+
+def _monster_template(monster_type: str) -> dict:
+    monster = MONSTER_CATALOG.get(monster_type)
+    if not monster:
+        raise ValueError("Unknown monster_type")
+    return copy.deepcopy(monster)
+
+
+def _living_opposition_instances(opposition_state: dict | None) -> list[dict]:
+    state = opposition_state or _empty_opposition_state()
+    return [instance for instance in state.get("instances", []) if not instance.get("is_dead")]
+
+
 def _default_generated_image() -> dict:
     return {
         "image_url": asset_url(DEFAULT_IMAGE_FILE),
@@ -60,6 +105,26 @@ def _default_generated_image() -> dict:
 
 def asset_url(filename: str) -> str:
     return f"/assets/{filename}"
+
+
+def serialize_adventure(adventure_id: str | None) -> dict | None:
+    if not adventure_id:
+        return None
+    adventure = ADVENTURES.get(adventure_id)
+    if not adventure:
+        return None
+    return {
+        **adventure,
+        "map_image_url": asset_url(adventure["map_image_file"]),
+    }
+
+
+def serialize_monster_reference(monster_id: str) -> dict:
+    monster = MONSTERS[monster_id]
+    return {
+        **monster,
+        "image_url": asset_url(monster["image_file"]),
+    }
 
 
 def _portrait_filename(player_id: str, class_id: str | None = None) -> str:
@@ -77,7 +142,8 @@ def _portrait_filename(player_id: str, class_id: str | None = None) -> str:
 
 
 def _default_name(slot: int) -> str:
-    return f"Agent {SLOT_COLORS.get(slot, slot).title()}"
+    color = SLOT_COLORS.get(slot)
+    return f"Agent {color.title() if color else slot}"
 
 
 def _class_assignment_for_slot(tab1: Tab1Inputs, slot: int) -> str:
@@ -126,6 +192,7 @@ def create_session(db: Session) -> SessionModel:
         selected_agent_slots=[1, 2, 3, 4],
         agent_names={str(slot): _default_name(slot) for slot in range(1, 5)},
         combat_state=_empty_combat_state(),
+        opposition_state=_empty_opposition_state(),
         generated_image=_default_generated_image(),
     )
     db.add(session)
@@ -292,6 +359,454 @@ def _build_character_payload(db: Session, session: SessionModel, agent_slot: int
             }
             for event in recent_events
         ],
+        "current_location": session.current_location_text,
+        "opposition_state": copy.deepcopy(session.opposition_state or _empty_opposition_state()),
+        "mechanical_resolution_hint": _build_player_mechanical_hint(db, session, agent_slot, class_data, user_text),
+        "user_prompt": user_text,
+    }
+
+
+def _build_party_combat_state(db: Session, session: SessionModel) -> list[dict]:
+    tab1 = get_tab1_or_create(db, session.session_id)
+    party_state = derive_party_state(db, session.session_id)
+    party = []
+    for slot in range(1, 5):
+        player_id = _player_for_slot(tab1, slot)
+        class_id = _class_assignment_for_slot(tab1, slot)
+        if not player_id or not class_id:
+            continue
+        class_data = CLASSES[class_id]
+        state = party_state.get(str(slot), {})
+        party.append(
+            {
+                "target_id": _player_actor_id(slot),
+                "target_type": "player",
+                "slot": slot,
+                "player_id": player_id,
+                "player_name": PLAYERS[player_id]["name"],
+                "class_id": class_id,
+                "armor_class": class_data["armor_class"],
+                "hp_current": state.get("hp_current", class_data["hp_max"]),
+                "hp_max": class_data["hp_max"],
+                "status_effects": state.get("status_effects", []),
+                "initiative": session.combat_state.get("initiative_values", {}).get(f"pc:{slot}"),
+            }
+            )
+    return party
+
+
+def _build_visible_monster_targets(session: SessionModel) -> list[dict]:
+    opposition_state = copy.deepcopy(session.opposition_state or _empty_opposition_state())
+    if not opposition_state.get("active"):
+        return []
+    monster_stats = opposition_state.get("monster_stats", {})
+    targets: list[dict] = []
+    for instance in opposition_state.get("instances", []):
+        if instance.get("is_dead"):
+            continue
+        targets.append(
+            {
+                "target_id": instance.get("monster_id", ""),
+                "target_type": "monster",
+                "name": instance.get("display_name", "Monster"),
+                "monster_type": opposition_state.get("monster_type", ""),
+                "armor_class": monster_stats.get("ac"),
+                "current_hp": instance.get("current_hp", 0),
+                "hp_max": instance.get("hp_max", 0),
+                "status_effects": instance.get("status_effects", []),
+            }
+        )
+    return targets
+
+
+def _extract_requested_check_type(user_text: str) -> str:
+    lowered = (user_text or "").lower()
+    match = re.search(r"\b([a-z]+(?:\s+[a-z]+){0,2})\s+check\b", lowered)
+    if match:
+        return match.group(1).strip()
+    if "saving throw" in lowered:
+        return "saving throw"
+    if re.search(r"\bsave\b", lowered):
+        return "save"
+    if "initiative" in lowered:
+        return "initiative"
+    return ""
+
+
+def _build_player_mechanical_hint(db: Session, session: SessionModel, agent_slot: int, class_data: dict, user_text: str) -> dict:
+    visible_targets = _build_visible_monster_targets(session)
+    requested_check_type = _extract_requested_check_type(user_text)
+    injured_ally_targets = _build_injured_ally_targets(db, session)
+    return {
+        "tool_first_required": True,
+        "actor_id": _player_actor_id(agent_slot),
+        "requested_check_type": requested_check_type,
+        "required_tool_for_check": "resolve_action" if requested_check_type else "",
+        "in_combat": bool(session.combat_state.get("in_combat")) and bool(visible_targets),
+        "ally_targets": _build_ally_targets(db, session),
+        "injured_allies_present": bool(injured_ally_targets),
+        "injured_ally_targets": injured_ally_targets,
+        "visible_monster_targets": visible_targets,
+        "available_actions": _build_player_action_catalog(class_data),
+        "required_action_tool": "resolve_action",
+        "default_action_sequence": [
+            "choose_target",
+            "choose_ability",
+            "call_resolve_action",
+            "read_resolution",
+            "then_narrate",
+        ],
+        "rules": {
+            "all_mechanics_resolve_in_backend": True,
+            "llm_must_not_roll_or_apply_hp": True,
+            "never_narrate_roll_before_tool": True,
+        },
+    }
+
+
+def _extract_monster_damage_formula(monster_stats: dict) -> str:
+    attack_text = str(monster_stats.get("attack_text", ""))
+    match = re.search(r"(\d+d\d+(?:\+\d+)?)", attack_text.replace(" ", ""))
+    return match.group(1) if match else ""
+
+
+def _build_opposition_mechanical_hint(db: Session, session: SessionModel) -> dict:
+    opposition_state = copy.deepcopy(session.opposition_state or _empty_opposition_state())
+    monster_stats = opposition_state.get("monster_stats", {})
+    attack_bonus = int(monster_stats.get("attack_bonus", 0) or 0)
+    attack_formula = f"1d20+{attack_bonus}" if attack_bonus >= 0 else f"1d20{attack_bonus}"
+    damage_formula = _extract_monster_damage_formula(monster_stats)
+    return {
+        "tool_first_required": True,
+        "living_monster_count": len(_living_opposition_instances(opposition_state)),
+        "party_targets": _build_party_combat_state(db, session),
+        "living_monster_actors": _build_monster_actor_catalog(session),
+        "required_action_tool": "resolve_action",
+        "default_action_sequence": [
+            "choose_living_monster",
+            "choose_party_target",
+            "call_resolve_action",
+            "read_resolution",
+            "then_narrate",
+        ],
+        "rules": {
+            "all_mechanics_resolve_in_backend": True,
+            "llm_must_not_roll_or_apply_hp": True,
+            "never_narrate_roll_before_tool": True,
+        },
+    }
+
+
+def _normalize_ability_name(value: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", (value or "").strip().upper()).strip("_")
+
+
+def _player_actor_id(slot: int) -> str:
+    return f"pc:{slot}"
+
+
+def _build_ally_targets(db: Session, session: SessionModel) -> list[dict]:
+    return [
+        {
+            "target_id": _player_actor_id(member["slot"]),
+            "target_type": "player",
+            "slot": member["slot"],
+            "name": member["player_name"],
+            "armor_class": member["armor_class"],
+            "current_hp": member["hp_current"],
+            "hp_max": member["hp_max"],
+            "status_effects": member["status_effects"],
+        }
+        for member in _build_party_combat_state(db, session)
+    ]
+
+
+def _build_injured_ally_targets(db: Session, session: SessionModel) -> list[dict]:
+    injured_targets: list[dict] = []
+    for member in _build_party_combat_state(db, session):
+        hp_current = int(member["hp_current"])
+        hp_max = int(member["hp_max"])
+        if hp_current < hp_max:
+            injured_targets.append(
+                {
+                    "target_id": _player_actor_id(member["slot"]),
+                    "target_type": "player",
+                    "slot": member["slot"],
+                    "name": member["player_name"],
+                    "current_hp": hp_current,
+                    "hp_max": hp_max,
+                    "below_half_hp": hp_current < (hp_max / 2),
+                }
+            )
+    return injured_targets
+
+
+def _build_player_action_catalog(class_data: dict) -> list[dict]:
+    actions: list[dict] = []
+    for profile in class_data.get("attack_profiles", []):
+        actions.append(
+            {
+                "action_type": "ATTACK",
+                "ability": _normalize_ability_name(profile.get("name", "")),
+                "display_name": profile.get("name", ""),
+                "attack_formula": profile.get("attack_formula", ""),
+                "damage_formula": profile.get("damage_formula", ""),
+                "damage_type": profile.get("damage_type", ""),
+            }
+        )
+    features = set(class_data.get("features", []))
+    if "Spellcasting" in features:
+        if class_data.get("class_id") in {"Wizard"}:
+            actions.append({"action_type": "SPELL", "ability": "MAGIC_MISSILE", "display_name": "Magic Missile"})
+        if class_data.get("class_id") in {"Cleric", "Druid"}:
+            actions.append({"action_type": "SPELL", "ability": "CURE_WOUNDS", "display_name": "Cure Wounds"})
+    actions.append({"action_type": "SKILL", "ability": "ATHLETICS", "display_name": "Athletics"})
+    return actions
+
+
+def _normalize_inventory_item_text(value: str) -> str:
+    lowered = re.sub(r"[^a-z0-9\s]", " ", (value or "").lower())
+    return " ".join(lowered.split())
+
+
+def _inventory_items_overlap(left: str, right: str) -> bool:
+    left_norm = _normalize_inventory_item_text(left)
+    right_norm = _normalize_inventory_item_text(right)
+    if not left_norm or not right_norm:
+        return False
+    return (
+        left_norm == right_norm
+        or left_norm in right_norm
+        or right_norm in left_norm
+    )
+
+
+def _build_monster_actor_catalog(session: SessionModel) -> list[dict]:
+    opposition_state = copy.deepcopy(session.opposition_state or _empty_opposition_state())
+    monster_stats = opposition_state.get("monster_stats", {})
+    damage_formula = _extract_monster_damage_formula(monster_stats)
+    attack_bonus = int(monster_stats.get("attack_bonus", 0) or 0)
+    attack_formula = f"1d20+{attack_bonus}" if attack_bonus >= 0 else f"1d20{attack_bonus}"
+    actors: list[dict] = []
+    for instance in opposition_state.get("instances", []):
+        if instance.get("is_dead"):
+            continue
+        actors.append(
+            {
+                "actor_id": instance.get("monster_id", ""),
+                "name": instance.get("display_name", "Monster"),
+                "action_type": "ATTACK",
+                "ability": _normalize_ability_name(monster_stats.get("monster_id", "ATTACK")),
+                "attack_formula": attack_formula,
+                "damage_formula": damage_formula,
+                "attack_text": monster_stats.get("attack_text", ""),
+            }
+        )
+    return actors
+
+
+def _resolve_payload_context(payload: dict) -> dict:
+    player_identity = payload.get("agent_identity", {})
+    class_sheet = payload.get("class_sheet", {})
+    opposition_state = payload.get("opposition_state", {}) or payload.get("monster_group_state", {})
+    mechanical_hint = copy.deepcopy(payload.get("mechanical_resolution_hint", {}))
+    actor_map: dict[str, dict] = {}
+    target_map: dict[str, dict] = {}
+    action_map: dict[tuple[str, str], dict] = {}
+
+    for target in mechanical_hint.get("ally_targets", []):
+        target_map[target.get("target_id", "")] = target
+    for target in mechanical_hint.get("visible_monster_targets", []):
+        target_map[target.get("target_id", "")] = target
+    for target in mechanical_hint.get("party_targets", []):
+        actor_id = target.get("target_id", "")
+        target_map[actor_id] = target
+        actor_map[actor_id] = target
+    for actor in mechanical_hint.get("living_monster_actors", []):
+        actor_map[actor.get("actor_id", "")] = actor
+        action_map[(actor.get("actor_id", ""), actor.get("ability", ""))] = actor
+
+    actor_id = mechanical_hint.get("actor_id", "")
+    if actor_id:
+        actor_map[actor_id] = {
+            "actor_id": actor_id,
+            "slot": player_identity.get("slot"),
+            "name": player_identity.get("name", ""),
+            "class_id": class_sheet.get("class_id", ""),
+            "armor_class": class_sheet.get("armor_class"),
+            "hp_max": class_sheet.get("hp_max"),
+        }
+    for action in mechanical_hint.get("available_actions", []):
+        action_map[(actor_id, action.get("ability", ""))] = action
+
+    return {
+        "actor_map": actor_map,
+        "target_map": target_map,
+        "action_map": action_map,
+        "mechanical_hint": mechanical_hint,
+        "opposition_state": opposition_state,
+        "class_sheet": class_sheet,
+    }
+
+
+def resolve_actions_for_payload(payload: dict, args: dict[str, Any]) -> dict[str, Any]:
+    context = _resolve_payload_context(payload)
+    actions = args.get("actions", [])
+    results: list[dict[str, Any]] = []
+    rolls: list[dict[str, Any]] = []
+    state_targets: list[dict[str, Any]] = []
+
+    for action in actions:
+        actor_id = str(action.get("actor_id", "") or "")
+        action_type = str(action.get("action_type", "") or "").upper()
+        ability = _normalize_ability_name(str(action.get("ability", "") or ""))
+        target_id = str(action.get("target_id", "") or "")
+        actor = context["actor_map"].get(actor_id, {})
+        target = context["target_map"].get(target_id, {})
+        actor_class_id = str(actor.get("class_id", "") or "")
+        target_type = str(target.get("target_type", "") or "")
+        target_slot = int(target.get("slot", 0) or 0)
+        result: dict[str, Any] = {
+            "actor_id": actor_id,
+            "target_id": target_id,
+            "action_type": action_type,
+            "ability": ability,
+            "hit": False,
+            "attack_total": 0,
+            "target_ac": target.get("armor_class"),
+            "damage": 0,
+            "damage_type": "",
+            "healing": 0,
+            "target_hp_after": target.get("current_hp"),
+            "success": False,
+            "reason": "",
+        }
+
+        if action_type == "ATTACK":
+            attack_profile = context["action_map"].get((actor_id, ability), {})
+            attack_formula = attack_profile.get("attack_formula", "")
+            damage_formula = attack_profile.get("damage_formula", "")
+            damage_type = attack_profile.get("damage_type", "")
+            if attack_formula and damage_formula and target_id:
+                attack_roll = perform_dice_roll(attack_formula, "attack roll", actor_id)
+                rolls.append(attack_roll)
+                result["attack_total"] = int(attack_roll.get("total", 0) or 0)
+                result["target_ac"] = int(target.get("armor_class", 0) or 0)
+                result["damage_type"] = damage_type
+                hit = result["attack_total"] >= result["target_ac"]
+                result["hit"] = hit
+                result["success"] = hit
+                if hit:
+                    damage_roll = perform_dice_roll(damage_formula, "damage roll", actor_id)
+                    rolls.append(damage_roll)
+                    damage = int(damage_roll.get("total", 0) or 0)
+                    result["damage"] = damage
+                    result["target_hp_after"] = max(0, int(target.get("current_hp", 0) or 0) - damage)
+                    state_targets.append(
+                        {
+                            "target_type": target_type or "monster",
+                            "target_slot": target_slot,
+                            "target_id": target_id,
+                            "changes": [{"kind": "damage", "amount": damage, "value": ""}],
+                        }
+                    )
+            results.append(result)
+            continue
+
+        if action_type == "SPELL":
+            if ability == "MAGIC_MISSILE" and target_id:
+                damage_roll = perform_dice_roll("3d4+3", "spell damage", actor_id)
+                rolls.append(damage_roll)
+                damage = int(damage_roll.get("total", 0) or 0)
+                result.update({"hit": True, "success": True, "attack_total": 100, "damage": damage, "damage_type": "force"})
+                result["target_hp_after"] = max(0, int(target.get("current_hp", 0) or 0) - damage)
+                state_targets.append(
+                    {
+                        "target_type": target_type or "monster",
+                        "target_slot": target_slot,
+                        "target_id": target_id,
+                        "changes": [{"kind": "damage", "amount": damage, "value": ""}],
+                    }
+                )
+            elif ability == "CURE_WOUNDS" and target_id:
+                if actor_class_id not in {"Cleric", "Druid"}:
+                    result.update(
+                        {
+                            "success": False,
+                            "reason": "Your current class is unable to cast healing magic.",
+                        }
+                    )
+                    results.append(result)
+                    continue
+                heal_roll = perform_dice_roll("1d8+2", "healing roll", actor_id)
+                rolls.append(heal_roll)
+                healing = int(heal_roll.get("total", 0) or 0)
+                result.update({"hit": True, "success": True, "attack_total": 100, "healing": healing})
+                result["target_hp_after"] = min(int(target.get("hp_max", 0) or 0), int(target.get("current_hp", 0) or 0) + healing)
+                state_targets.append(
+                    {
+                        "target_type": target_type or "player",
+                        "target_slot": target_slot,
+                        "target_id": target_id,
+                        "changes": [{"kind": "healing", "amount": healing, "value": ""}],
+                    }
+                )
+            results.append(result)
+            continue
+
+        if action_type == "SKILL":
+            skill_roll = perform_dice_roll("1d20+2", "skill check", actor_id)
+            rolls.append(skill_roll)
+            total = int(skill_roll.get("total", 0) or 0)
+            result.update(
+                {
+                    "success": total >= 13,
+                    "hit": total >= 13,
+                    "attack_total": total,
+                    "target_ac": 13,
+                    "target_hp_after": None,
+                }
+            )
+            results.append(result)
+            continue
+
+        results.append(result)
+
+    return {
+        "results": results,
+        "rolls": rolls,
+        "state_changes": [{"targets": state_targets, "source": "resolve_action"}] if state_targets else [],
+    }
+
+
+def _build_opposition_payload(db: Session, session: SessionModel, user_text: str) -> dict:
+    memory_blocks = _current_memory_blocks(db, session.session_id)
+    recent_events = _recent_events(db, session)
+    opposition_state = copy.deepcopy(session.opposition_state or _empty_opposition_state())
+    return {
+        "monster_group_state": opposition_state,
+        "party_combat_state": _build_party_combat_state(db, session),
+        "mechanical_resolution_hint": _build_opposition_mechanical_hint(db, session),
+        "structured_memory": [
+            {
+                "type": block.type.value,
+                "from_prompt_index": block.from_prompt_index,
+                "to_prompt_index": block.to_prompt_index,
+                "json_payload": block.json_payload,
+            }
+            for block in memory_blocks
+        ],
+        "recent_context": [
+            {
+                "prompt_index": event.prompt_index,
+                "role": event.role.value,
+                "agent_slot": event.agent_slot,
+                "agent_name": session.agent_names.get(str(event.agent_slot), None) if event.agent_slot else None,
+                "text": event.text,
+            }
+            for event in recent_events
+        ],
+        "current_location": session.current_location_text,
         "user_prompt": user_text,
     }
 
@@ -343,6 +858,7 @@ def lock_tab1(db: Session, session_id: str) -> SessionModel:
     session.last_summarized_prompt_index = 0
     session.state = SessionState.ACTIVE
     session.combat_state = _empty_combat_state()
+    session.opposition_state = _empty_opposition_state()
     session.generated_image = _default_generated_image()
     session.selected_narrative_player_id = tab1.selected_player_ids[0]
     db.add(
@@ -429,15 +945,29 @@ def _run_summarization(db: Session, session: SessionModel, to_prompt_index: int)
         return True
 
 
-def _strip_markers(agent_text: str) -> tuple[str, list[tuple[str, str]]]:
+def _strip_markers(agent_text: str) -> tuple[str, list[dict]]:
     clean_lines = []
-    markers: list[tuple[str, str]] = []
+    markers: list[dict] = []
     for line in agent_text.splitlines():
-        match = MARKER_RE.match(line.strip())
-        if match:
-            markers.append((match.group(1), match.group(2).strip()))
-        else:
-            clean_lines.append(line)
+        dice_match = TOOL_DICE_ROLL_MARKER_RE.match(line.strip())
+        if dice_match:
+            try:
+                payload = json.loads(dice_match.group(1))
+                payload["_marker_type"] = "dice_roll"
+                markers.append(payload)
+                continue
+            except Exception:
+                pass
+        combat_match = COMBAT_STATE_MARKER_RE.match(line.strip())
+        if combat_match:
+            try:
+                payload = json.loads(combat_match.group(1))
+                payload["_marker_type"] = "combat_state"
+                markers.append(payload)
+                continue
+            except Exception:
+                pass
+        clean_lines.append(line)
     return "\n".join(clean_lines).strip(), markers
 
 
@@ -455,46 +985,173 @@ def _append_system_event(db: Session, session_id: str, prompt_index: int, kind: 
     )
 
 
-def _apply_markers(db: Session, session: SessionModel, agent_slot: int, prompt_index: int, markers: list[tuple[str, str]]) -> None:
-    name = session.agent_names.get(str(agent_slot), _default_name(agent_slot))
-    for marker, value in markers:
-        if marker == "DAMAGE_TAKEN" and value.isdigit():
-            _append_state_change(db, session, prompt_index, agent_slot, "damage", amount=int(value), source="marker")
-        elif marker == "HEALING_RECEIVED" and value.isdigit():
-            _append_state_change(db, session, prompt_index, agent_slot, "healing", amount=int(value), source="marker")
-        elif marker == "STATUS_GAINED":
-            _append_state_change(db, session, prompt_index, agent_slot, "status_add", value=value, source="marker")
-        elif marker == "STATUS_LOST":
-            _append_state_change(db, session, prompt_index, agent_slot, "status_remove", value=value, source="marker")
-        elif marker == "INVENTORY_GAINED":
-            _append_state_change(db, session, prompt_index, agent_slot, "inventory_add", value=value, source="marker")
-        elif marker == "INVENTORY_LOST":
-            _append_state_change(db, session, prompt_index, agent_slot, "inventory_remove", value=value, source="marker")
+def _apply_markers(db: Session, session: SessionModel, agent_slot: int, prompt_index: int, markers: list[dict]) -> None:
+    for marker in markers:
+        if marker.get("_marker_type") == "dice_roll":
+            result = {key: value for key, value in marker.items() if key != "_marker_type"}
+            label = str(result.get("label", "") or result.get("formula", "Dice Roll"))
+            total = int(result.get("total", 0) or 0)
+            db.add(
+                Event(
+                    session_id=session.session_id,
+                    prompt_index=prompt_index,
+                    role=EventRole.SYSTEM,
+                    kind=EventKind.DICE_ROLL,
+                    agent_slot=agent_slot,
+                    text=f"{label}: {total}",
+                    json_payload=result,
+                )
+            )
+            continue
+        target_type = marker.get("target_type", "player")
+        if target_type == "monster":
+            target_id = marker.get("target_id", "")
+            _append_state_change(
+                db,
+                session,
+                prompt_index,
+                target_type="monster",
+                target_id=target_id,
+                kind=marker.get("kind", ""),
+                amount=int(marker.get("amount", 0) or 0),
+                value=str(marker.get("value", "") or ""),
+                source=marker.get("source", "marker"),
+            )
+            continue
+        _append_state_change(
+            db,
+            session,
+            prompt_index,
+            target_type="player",
+            target_slot=int(marker.get("target_slot", agent_slot) or agent_slot),
+            kind=marker.get("kind", ""),
+            amount=int(marker.get("amount", 0) or 0),
+            value=str(marker.get("value", "") or ""),
+            source=marker.get("source", "marker"),
+        )
 
 
 def _append_state_change(
     db: Session,
     session: SessionModel,
     prompt_index: int,
-    slot: int,
+    target_type: str,
     kind: str,
+    target_slot: int = 0,
+    target_id: str = "",
     amount: int = 0,
     value: str = "",
     source: str = "unknown",
 ) -> None:
+    if target_type == "monster":
+        opposition_state = copy.deepcopy(session.opposition_state or _empty_opposition_state())
+        instance = next((item for item in opposition_state.get("instances", []) if item.get("monster_id") == target_id), None)
+        if not instance:
+            return
+        name = instance.get("display_name") or target_id
+        if kind == "damage" and amount > 0:
+            instance["current_hp"] = max(0, int(instance.get("current_hp", 0)) - amount)
+            _append_system_event(
+                db,
+                session.session_id,
+                prompt_index,
+                EventKind.HP_CHANGED,
+                f"{name} takes {amount} damage.",
+                {"target_type": "monster", "target_id": target_id, "amount": amount, "source": source},
+            )
+        elif kind == "healing" and amount > 0:
+            instance["current_hp"] = min(int(instance.get("hp_max", 0)), int(instance.get("current_hp", 0)) + amount)
+            _append_system_event(
+                db,
+                session.session_id,
+                prompt_index,
+                EventKind.HP_CHANGED,
+                f"{name} heals {amount} HP.",
+                {"target_type": "monster", "target_id": target_id, "amount": -amount, "source": source},
+            )
+        elif kind == "status_add" and value:
+            statuses = list(instance.get("status_effects", []))
+            if value not in statuses:
+                statuses.append(value)
+                instance["status_effects"] = statuses
+            _append_system_event(
+                db,
+                session.session_id,
+                prompt_index,
+                EventKind.CONDITION_ADDED,
+                f"{name} gains status: {value}.",
+                {"target_type": "monster", "target_id": target_id, "status": value, "source": source},
+            )
+        elif kind == "status_remove" and value:
+            instance["status_effects"] = [item for item in instance.get("status_effects", []) if item != value]
+            _append_system_event(
+                db,
+                session.session_id,
+                prompt_index,
+                EventKind.CONDITION_REMOVED,
+                f"{name} loses status: {value}.",
+                {"target_type": "monster", "target_id": target_id, "status": value, "source": source},
+            )
+        if int(instance.get("current_hp", 0)) <= 0 and not instance.get("is_dead"):
+            instance["current_hp"] = 0
+            instance["is_dead"] = True
+            _append_system_event(
+                db,
+                session.session_id,
+                prompt_index,
+                EventKind.MONSTER_DIED,
+                f"{name} is dead.",
+                {"target_type": "monster", "target_id": target_id, "source": source},
+            )
+        session.opposition_state = opposition_state
+        if opposition_state.get("active") and not _living_opposition_instances(opposition_state):
+            _dismiss_opposition_state(db, session, prompt_index, reason="all_dead")
+        return
+
+    slot = int(target_slot)
     name = session.agent_names.get(str(slot), _default_name(slot))
     if kind == "damage" and amount > 0:
-        _append_system_event(db, session.session_id, prompt_index, EventKind.DAMAGE_APPLIED, f"{name} takes {amount} damage.", {"target_slot": slot, "amount": amount, "source": source})
+        _append_system_event(db, session.session_id, prompt_index, EventKind.DAMAGE_APPLIED, f"{name} takes {amount} damage.", {"target_type": "player", "target_slot": slot, "amount": amount, "source": source})
     elif kind == "healing" and amount > 0:
-        _append_system_event(db, session.session_id, prompt_index, EventKind.DAMAGE_APPLIED, f"{name} heals {amount} HP.", {"target_slot": slot, "amount": -amount, "source": source})
+        _append_system_event(db, session.session_id, prompt_index, EventKind.DAMAGE_APPLIED, f"{name} heals {amount} HP.", {"target_type": "player", "target_slot": slot, "amount": -amount, "source": source})
     elif kind == "status_add" and value:
-        _append_system_event(db, session.session_id, prompt_index, EventKind.CONDITION_ADDED, f"{name} gains status: {value}.", {"target_slot": slot, "status": value, "source": source})
+        _append_system_event(db, session.session_id, prompt_index, EventKind.CONDITION_ADDED, f"{name} gains status: {value}.", {"target_type": "player", "target_slot": slot, "status": value, "source": source})
     elif kind == "status_remove" and value:
-        _append_system_event(db, session.session_id, prompt_index, EventKind.CONDITION_REMOVED, f"{name} loses status: {value}.", {"target_slot": slot, "status": value, "source": source})
+        _append_system_event(db, session.session_id, prompt_index, EventKind.CONDITION_REMOVED, f"{name} loses status: {value}.", {"target_type": "player", "target_slot": slot, "status": value, "source": source})
     elif kind == "inventory_add" and value:
-        _append_system_event(db, session.session_id, prompt_index, EventKind.INVENTORY_GAINED, f"{name} gains {value}.", {"target_slot": slot, "item": value, "source": source})
+        current_inventory = derive_party_state(db, session.session_id).get(str(slot), {}).get("inventory", [])
+        if any(_inventory_items_overlap(existing, value) for existing in current_inventory):
+            return
+        _append_system_event(db, session.session_id, prompt_index, EventKind.INVENTORY_GAINED, f"{name} gains {value}.", {"target_type": "player", "target_slot": slot, "item": value, "source": source})
     elif kind == "inventory_remove" and value:
-        _append_system_event(db, session.session_id, prompt_index, EventKind.INVENTORY_LOST, f"{name} loses {value}.", {"target_slot": slot, "item": value, "source": source})
+        _append_system_event(db, session.session_id, prompt_index, EventKind.INVENTORY_LOST, f"{name} loses {value}.", {"target_type": "player", "target_slot": slot, "item": value, "source": source})
+
+
+def _dismiss_opposition_state(db: Session, session: SessionModel, prompt_index: int, reason: str) -> None:
+    opposition_state = copy.deepcopy(session.opposition_state or _empty_opposition_state())
+    if not opposition_state.get("active"):
+        return
+    opposition_state["active"] = False
+    session.opposition_state = opposition_state
+    session.selected_agent_slots = [slot for slot in session.selected_agent_slots if slot != OPPOSITION_AGENT_SLOT]
+    session.agent_names.pop(str(OPPOSITION_AGENT_SLOT), None)
+    combat = copy.deepcopy(session.combat_state or _empty_combat_state())
+    combat["initiative_order"] = [combatant for combatant in combat.get("initiative_order", []) if combatant != OPPOSITION_INITIATIVE_ID]
+    combat["initiative_values"].pop(OPPOSITION_INITIATIVE_ID, None)
+    if combat.get("initiative_order"):
+        combat["turn_index"] = min(int(combat.get("turn_index", 0)), len(combat["initiative_order"]) - 1)
+        combat["in_combat"] = True
+    else:
+        combat = _empty_combat_state()
+    session.combat_state = combat
+    _append_system_event(
+        db,
+        session.session_id,
+        prompt_index,
+        EventKind.OPPOSITION_DISMISSED,
+        "Opposition dismissed.",
+        {"reason": reason},
+    )
 
 
 def _collect_target_slots(session: SessionModel, agent_slot: int, lowered: str) -> set[int]:
@@ -520,13 +1177,13 @@ def _extract_gm_state_events(db: Session, session: SessionModel, agent_slot: int
     if damage_match and targets:
         amount = int(damage_match.group(1))
         for slot in sorted(targets):
-            _append_state_change(db, session, prompt_index, slot, "damage", amount=amount, source="gm_parser")
+            _append_state_change(db, session, prompt_index, target_type="player", target_slot=slot, kind="damage", amount=amount, source="gm_parser")
 
     heal_match = re.search(r"\b(?:heal|heals|recover|recovers|regain|regains)\s+(\d+)\s*(?:hp|hit points)?\b", lowered)
     if heal_match and targets:
         amount = int(heal_match.group(1))
         for slot in sorted(targets):
-            _append_state_change(db, session, prompt_index, slot, "healing", amount=amount, source="gm_parser")
+            _append_state_change(db, session, prompt_index, target_type="player", target_slot=slot, kind="healing", amount=amount, source="gm_parser")
 
     gain_match = re.search(
         r"\b(?:gifted|gets?|finds?|receives?|gains?|given)(?:\s+\w+){0,6}\s+(?:an?|one|1)\s+([a-z][a-z\s'-]+?)(?:[,.!]|$)",
@@ -535,13 +1192,13 @@ def _extract_gm_state_events(db: Session, session: SessionModel, agent_slot: int
     if gain_match and targets:
         item = gain_match.group(1).strip().title()
         for slot in sorted(targets):
-            _append_state_change(db, session, prompt_index, slot, "inventory_add", value=item, source="gm_parser")
+            _append_state_change(db, session, prompt_index, target_type="player", target_slot=slot, kind="inventory_add", value=item, source="gm_parser")
 
     lose_match = re.search(r"\b(?:loses?|drop|drops|spends?)\s+(?:an?|one|1)\s+([a-z][a-z\s'-]+?)(?:[,.!]|$)", lowered)
     if lose_match and targets:
         item = lose_match.group(1).strip().title()
         for slot in sorted(targets):
-            _append_state_change(db, session, prompt_index, slot, "inventory_remove", value=item, source="gm_parser")
+            _append_state_change(db, session, prompt_index, target_type="player", target_slot=slot, kind="inventory_remove", value=item, source="gm_parser")
 
 
 def _advance_turn_if_in_combat(session: SessionModel) -> None:
@@ -563,6 +1220,8 @@ def prompt_agent(db: Session, session_id: str, agent_slot: int, user_text: str) 
         raise ValueError("Session is not ACTIVE")
     if agent_slot not in session.selected_agent_slots:
         raise ValueError("Agent slot not selected for this session")
+    if agent_slot == OPPOSITION_AGENT_SLOT and not _living_opposition_instances(session.opposition_state):
+        raise ValueError("Opposition is not active")
 
     session.prompt_index += 1
     user_event = Event(
@@ -576,11 +1235,17 @@ def prompt_agent(db: Session, session_id: str, agent_slot: int, user_text: str) 
     )
     db.add(user_event)
     db.flush()
-    _extract_gm_state_events(db, session, agent_slot, session.prompt_index, user_text)
+    if agent_slot != OPPOSITION_AGENT_SLOT:
+        _extract_gm_state_events(db, session, agent_slot, session.prompt_index, user_text)
 
-    agent_payload = _build_character_payload(db, session, agent_slot, user_text)
-    agent_text_raw = provider.generate("agent_character", settings.llm_model_character, agent_payload)
-    log_artifact(db, session_id, "agent_character", settings.llm_model_character, agent_payload, agent_text_raw, provider.provider_name)
+    if agent_slot == OPPOSITION_AGENT_SLOT:
+        agent_payload = _build_opposition_payload(db, session, user_text)
+        agent_text_raw = provider.generate("agent12", settings.llm_model_opposition, agent_payload)
+        log_artifact(db, session_id, "agent12", settings.llm_model_opposition, agent_payload, agent_text_raw, provider.provider_name)
+    else:
+        agent_payload = _build_character_payload(db, session, agent_slot, user_text)
+        agent_text_raw = provider.generate("agent_character", settings.llm_model_character, agent_payload)
+        log_artifact(db, session_id, "agent_character", settings.llm_model_character, agent_payload, agent_text_raw, provider.provider_name)
     agent_text, markers = _strip_markers(agent_text_raw)
     agent_event = Event(
         session_id=session_id,
@@ -618,6 +1283,144 @@ def end_chapter(db: Session, session_id: str) -> SessionModel:
         session.state = SessionState.SUMMARIZING
         _run_summarization(db, session, session.prompt_index)
     session.state = SessionState.ENDED
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def travel_to_location(db: Session, session_id: str, location_id: str, location_name: str, location_description: str) -> SessionModel:
+    session = get_session_or_404(db, session_id)
+    if session.state != SessionState.ACTIVE:
+        raise ValueError("Travel is allowed only in ACTIVE state")
+
+    clean_name = (location_name or "").strip()
+    clean_description = (location_description or "").strip()
+    if not clean_name or not clean_description:
+        raise ValueError("Location name and description are required")
+
+    travel_text = f"The party ventures to, {clean_name}, surveying the area you see {clean_description}."
+    session.current_location_text = travel_text
+    db.add(
+        Event(
+            session_id=session_id,
+            prompt_index=session.prompt_index,
+            role=EventRole.SYSTEM,
+            kind=EventKind.TRANSCRIPT,
+            agent_slot=None,
+            text=travel_text,
+            json_payload={"location_id": location_id, "location_name": clean_name, "source": "travel_button"},
+        )
+    )
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def take_long_rest(db: Session, session_id: str) -> SessionModel:
+    session = get_session_or_404(db, session_id)
+    if session.state != SessionState.ACTIVE:
+        raise ValueError("Long rest is allowed only in ACTIVE state")
+    if (session.opposition_state or {}).get("active"):
+        raise ValueError("You cannot take a long rest while Opposition is active")
+
+    tab1 = get_tab1_or_create(db, session_id)
+    current_party_state = derive_party_state(db, session_id)
+    session.prompt_index += 1
+    prompt_index = session.prompt_index
+
+    db.add(
+        Event(
+            session_id=session_id,
+            prompt_index=prompt_index,
+            role=EventRole.SYSTEM,
+            kind=EventKind.TRANSCRIPT,
+            agent_slot=None,
+            text=LONG_REST_TRANSCRIPT,
+            json_payload={"source": "long_rest", "hours": 8},
+        )
+    )
+
+    for slot in range(1, 5):
+        player_id = _player_for_slot(tab1, slot)
+        class_id = _class_assignment_for_slot(tab1, slot)
+        if not player_id or not class_id:
+            continue
+        hp_max = int(CLASSES[class_id]["hp_max"])
+        hp_current = int(current_party_state.get(str(slot), {}).get("hp_current", hp_max))
+        healing = max(0, hp_max - hp_current)
+        if healing > 0:
+            _append_state_change(
+                db,
+                session,
+                prompt_index,
+                target_type="player",
+                target_slot=slot,
+                kind="healing",
+                amount=healing,
+                source="long_rest",
+            )
+
+    session.combat_state = _empty_combat_state()
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def spawn_opposition(db: Session, session_id: str, monster_type: str, quantity: int) -> SessionModel:
+    session = get_session_or_404(db, session_id)
+    tab1 = get_tab1_or_create(db, session_id)
+    if session.state != SessionState.ACTIVE:
+        raise ValueError("Opposition can only be spawned during ACTIVE play")
+    if (session.opposition_state or {}).get("active"):
+        raise ValueError("Dismiss the current Opposition group before spawning a new one")
+    if quantity < 1 or quantity > 4:
+        raise ValueError("Quantity must be between 1 and 4")
+    if monster_type not in ADVENTURES.get(tab1.adventure_id, {}).get("monsters", []):
+        raise ValueError("That monster is not assigned to the selected adventure")
+
+    template = _monster_template(monster_type)
+    instances = []
+    for index in range(quantity):
+        instances.append(
+            {
+                "monster_id": str(uuid.uuid4()),
+                "display_name": MONSTER_INSTANCE_LABELS[index],
+                "current_hp": template["hp"],
+                "hp_max": template["hp"],
+                "is_dead": False,
+                "status_effects": [],
+            }
+        )
+    session.opposition_state = {
+        "active": True,
+        "group_id": str(uuid.uuid4()),
+        "initiative_id": OPPOSITION_INITIATIVE_ID,
+        "monster_type": monster_type,
+        "monster_stats": template,
+        "instances": instances,
+    }
+    if OPPOSITION_AGENT_SLOT not in session.selected_agent_slots:
+        session.selected_agent_slots = [*session.selected_agent_slots, OPPOSITION_AGENT_SLOT]
+    session.agent_names[str(OPPOSITION_AGENT_SLOT)] = OPPOSITION_DISPLAY_NAME
+    _append_system_event(
+        db,
+        session.session_id,
+        session.prompt_index,
+        EventKind.OPPOSITION_SPAWNED,
+        f"Opposition spawned: {quantity} x {monster_type}.",
+        {"monster_type": monster_type, "quantity": quantity},
+    )
+    roll_initiative(db, session_id)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def dismiss_opposition(db: Session, session_id: str) -> SessionModel:
+    session = get_session_or_404(db, session_id)
+    if not (session.opposition_state or {}).get("active"):
+        raise ValueError("No active Opposition to dismiss")
+    _dismiss_opposition_state(db, session, session.prompt_index, reason="manual")
     db.commit()
     db.refresh(session)
     return session
@@ -760,8 +1563,10 @@ def reset_session(db: Session, session_id: str) -> SessionModel:
     session.selected_agent_slots = [1, 2, 3, 4]
     session.agent_names = {str(slot): _default_name(slot) for slot in range(1, 5)}
     session.narrative_agent_definition_text = ""
+    session.current_location_text = ""
     session.selected_narrative_player_id = ""
     session.combat_state = _empty_combat_state()
+    session.opposition_state = _empty_opposition_state()
     session.generated_image = _default_generated_image()
 
     db.commit()
@@ -836,6 +1641,18 @@ def roll_initiative(db: Session, session_id: str) -> dict:
         result = roll_dice_for_session(db, session_id, formula, f"Initiative: {PLAYERS[player_id]['name']}", f"Player:{player_id}")
         rolls.append(result)
         initiative_values[f"pc:{slot}"] = result["total"]
+
+    opposition_state = session.opposition_state or _empty_opposition_state()
+    if opposition_state.get("active") and _living_opposition_instances(opposition_state):
+        result = roll_dice_for_session(
+            db,
+            session_id,
+            "1d20+2",
+            "Initiative: Opposition",
+            "Opposition",
+        )
+        rolls.append(result)
+        initiative_values[OPPOSITION_INITIATIVE_ID] = result["total"]
 
     ordered = sorted(initiative_values.items(), key=lambda item: (-item[1], item[0]))
     session.combat_state = {
@@ -917,12 +1734,37 @@ def generate_scene_image(db: Session, session_id: str) -> dict:
 
 
 def synthesize_player_reply_tts(db: Session, session_id: str, text: str, player_name: str) -> bytes:
+    started_at = time.perf_counter()
     get_session_or_404(db, session_id)
     provider = get_provider()
     clean_text = (text or "").strip()
     if not clean_text:
         raise ValueError("Reply text is required for TTS")
-    return provider.generate_speech(clean_text, tts_voice_alias_for_player(player_name))
+    voice_alias = tts_voice_alias_for_player(player_name)
+    try:
+        audio_bytes = provider.generate_speech(clean_text, voice_alias)
+        elapsed = time.perf_counter() - started_at
+        logger.info(
+            "TTS request completed in %.2fs session_id=%s player=%s voice_alias=%s text_chars=%s bytes=%s",
+            elapsed,
+            session_id,
+            player_name,
+            voice_alias,
+            len(clean_text),
+            len(audio_bytes),
+        )
+        return audio_bytes
+    except Exception:
+        elapsed = time.perf_counter() - started_at
+        logger.exception(
+            "TTS request failed after %.2fs session_id=%s player=%s voice_alias=%s text_chars=%s",
+            elapsed,
+            session_id,
+            player_name,
+            voice_alias,
+            len(clean_text),
+        )
+        raise
 
 
 def derive_party_state(db: Session, session_id: str) -> dict[str, dict]:
@@ -946,6 +1788,8 @@ def derive_party_state(db: Session, session_id: str) -> dict[str, dict]:
     seen_state_events: set[tuple] = set()
     for event in events:
         payload = event.json_payload or {}
+        if payload.get("target_type", "player") != "player":
+            continue
         slot = payload.get("target_slot")
         if slot is None:
             continue
@@ -953,7 +1797,7 @@ def derive_party_state(db: Session, session_id: str) -> dict[str, dict]:
         if key not in state:
             continue
         dedupe_key = None
-        if event.kind == EventKind.DAMAGE_APPLIED:
+        if event.kind in {EventKind.DAMAGE_APPLIED, EventKind.HP_CHANGED}:
             dedupe_key = (event.prompt_index, event.kind.value, slot, int(payload.get("amount", 0)))
         elif event.kind in {EventKind.CONDITION_ADDED, EventKind.CONDITION_REMOVED}:
             dedupe_key = (event.prompt_index, event.kind.value, slot, payload.get("status", ""))
@@ -963,7 +1807,7 @@ def derive_party_state(db: Session, session_id: str) -> dict[str, dict]:
             if dedupe_key in seen_state_events:
                 continue
             seen_state_events.add(dedupe_key)
-        if event.kind == EventKind.DAMAGE_APPLIED:
+        if event.kind in {EventKind.DAMAGE_APPLIED, EventKind.HP_CHANGED}:
             amount = int(payload.get("amount", 0))
             hp_max = CLASSES[_class_assignment_for_slot(tab1, int(slot))]["hp_max"]
             state[key]["hp_current"] = max(0, min(state[key]["hp_current"] - amount, hp_max))
@@ -998,7 +1842,8 @@ def get_session_detail(db: Session, session_id: str) -> dict:
         class_id = _class_assignment_for_slot(tab1, slot)
         if player_id and class_id:
             party.append(_party_member(slot, player_id, class_id, party_state.get(str(slot), {})))
-    gm_monsters = [MONSTERS[name] for name in ADVENTURES.get(tab1.adventure_id, {}).get("monsters", [])]
+    adventure = serialize_adventure(tab1.adventure_id)
+    gm_monsters = [serialize_monster_reference(name) for name in sorted(ADVENTURES.get(tab1.adventure_id, {}).get("monsters", []))]
     return {
         "session": session,
         "tab1": tab1,
@@ -1006,7 +1851,7 @@ def get_session_detail(db: Session, session_id: str) -> dict:
         "memory_blocks": memory_blocks,
         "narrative_drafts": drafts,
         "party": party,
-        "active_adventure": ADVENTURES.get(tab1.adventure_id),
+        "active_adventure": adventure,
         "gm_monsters": gm_monsters,
         "image_state": session.generated_image or _default_generated_image(),
     }

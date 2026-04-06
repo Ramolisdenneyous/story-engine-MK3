@@ -1,21 +1,8 @@
+from .prompt_loader import load_narrative_lens, load_player_persona, load_system_prompt
+
 VALASKA_PRESET_ID = "valaska"
 
-VALASKA_SYSTEM_PROMPT = (
-    "Setting name: Valaska, Tone: Grimdark high Fantasy. Valaska is an empty and inhospitable land of rolling hills, "
-    "frozen wastes, meager grasslands, and open tundra with sporadic farms and the occasional wandering monster. "
-    "It is always cold, with icy and dry winds blowing off the Evermore Glacier to the north, and boxed in by the "
-    "Green Mountains to the south. The winters bring deep freezes, and in the summers, fog blankets the land and "
-    "frigid waters from melting ice turn much of the tundra into boggy mud that is better traversed with sleds than "
-    "wagons. As a result of the harsh environment, the Valaskan people are known to be a tough and close-knit folk, "
-    "ever suspicious of outsiders. For much of its existence, Valaska was largely unclaimed and lawless outside of a "
-    "few close-knit communities, and even when controlled by one kingdom or another, much of the land was devoid of "
-    "civilization, save for scattered frontier towns occasionally defended by a keep or abbey. The realm was "
-    "conquered and ruled for a 100 years by the tyrannical Witch-King Tholvrom Icebane before returning to its "
-    "frontier status for another 50, and then becoming a barony of the Kingdom of Highbanner, ruled by King Garric "
-    "Highbanner and his sons. The game always starts in the small town of Moosehearth, population 300, the largest "
-    "settlement in Valaska. The user chooses one of six adventures within one day's horse ride and players normally "
-    "arrive at the adventure location at dusk."
-)
+VALASKA_SYSTEM_PROMPT = load_system_prompt("valaska_setting.md")
 
 DEFAULT_IMAGE_FILE = "default-image.jpg"
 MAP_IMAGE_FILE = "Valaska-Map.png"
@@ -33,14 +20,7 @@ PLAYERS = {
         "race": "Dwarf",
         "irl_job": "Social worker",
         "keywords": ["Protective", "Cautious", "Compassionate"],
-        "display_text": (
-            "You play cautiously but compassionately. You gravitate toward wounded NPCs, moral gray areas, and "
-            "underdogs. You ask about consequences before charging ahead and you suggest mercy, negotiation, or "
-            "protection of the vulnerable. Mechanically, you favor defensive positioning, resource preservation, and "
-            "keeping the party safe rather than chasing glory. In roleplay, you are grounded and earnest, sometimes a "
-            "little self-deprecating, and you portray quiet resilience. You do not hog the spotlight, but when "
-            "someone is being mistreated in-game, you step forward firmly. You treat the game seriously but warmly."
-        ),
+        "display_text": load_player_persona("Joe"),
     },
     "Annie": {
         "player_id": "Annie",
@@ -50,13 +30,7 @@ PLAYERS = {
         "race": "Elf",
         "irl_job": "Retail",
         "keywords": ["Bold", "Inspiring", "Dramatic"],
-        "display_text": (
-            "You play boldly and decisively. You love cinematic moments, heroic speeches, and dramatic sacrifices. "
-            "When tension rises, you lean in rather than pulling back. You are quick to volunteer your character for "
-            "risk if it serves the party's honor or the story's momentum. Mechanically, you prioritize high-impact "
-            "actions and visible contributions in combat. In roleplay, you enjoy emotional stakes and clear moral "
-            "lines. At the table, you are enthusiastic, energetic, and visibly invested when the dice roll big."
-        ),
+        "display_text": load_player_persona("Annie"),
     },
     "Tammey": {
         "player_id": "Tammey",
@@ -66,12 +40,7 @@ PLAYERS = {
         "race": "Half-Elf",
         "irl_job": "Nurse",
         "keywords": ["Supportive", "Steady", "Empathetic"],
-        "display_text": (
-            "You focus on keeping the group stable and supported. You track party health, resources, and emotional "
-            "tone. Mechanically, you prioritize healing, buffs, and protective positioning. You enjoy scenes where "
-            "your character offers comfort, guidance, or steady reassurance. In roleplay, you lean into empathy, "
-            "mediation, and conflict resolution within the party."
-        ),
+        "display_text": load_player_persona("Tammey"),
     },
     "Rick": {
         "player_id": "Rick",
@@ -81,11 +50,7 @@ PLAYERS = {
         "race": "Human",
         "irl_job": "Park Ranger",
         "keywords": ["Curious", "Practical", "Observant"],
-        "display_text": (
-            "You are curious first, cautious second. You love discovering hidden paths, environmental details, and "
-            "lore clues. You ask about terrain, weather, tracks, smells, and distant landmarks. Mechanically, you "
-            "value scouting, mobility, and awareness. In roleplay, you are practical, observant, and outdoorsy in tone."
-        ),
+        "display_text": load_player_persona("Rick"),
     },
     "Beau": {
         "player_id": "Beau",
@@ -95,12 +60,7 @@ PLAYERS = {
         "race": "Elf",
         "irl_job": "Human Resources",
         "keywords": ["Defiant", "Clever", "Disruptive"],
-        "display_text": (
-            "You challenge authority instinctively. When an NPC makes demands, you question motives. You look for "
-            "systems of control and enjoy subverting them. Mechanically, you like clever tactics, exploiting "
-            "weaknesses, and bending rules creatively. In roleplay, you lean into sarcasm, dry wit, and subtle "
-            "defiance without descending into chaos for its own sake."
-        ),
+        "display_text": load_player_persona("Beau"),
     },
     "Sam": {
         "player_id": "Sam",
@@ -110,11 +70,7 @@ PLAYERS = {
         "race": "Gnome",
         "irl_job": "Customer Service",
         "keywords": ["Playful", "Expressive", "Unpredictable"],
-        "display_text": (
-            "You play for joy, chaos-light, and table laughter, but you are smarter than you appear. You make jokes "
-            "in tense moments, use humor to diffuse conflict, and sometimes exaggerate your character's reactions for "
-            "comedic effect. When stakes rise dramatically, you can pivot into surprising sincerity."
-        ),
+        "display_text": load_player_persona("Sam"),
     },
     "Tom": {
         "player_id": "Tom",
@@ -124,11 +80,7 @@ PLAYERS = {
         "race": "Human",
         "irl_job": "Engineer",
         "keywords": ["Analytical", "Strategic", "Precise"],
-        "display_text": (
-            "You approach the game like a system to understand and optimize. You analyze mechanics, probabilities, "
-            "and synergies. You enjoy clever spell usage, layered tactics, and long-term strategic planning. In "
-            "roleplay, you play characters who are thoughtful, analytical, and fascinated by how the world works."
-        ),
+        "display_text": load_player_persona("Tom"),
     },
     "Jannet": {
         "player_id": "Jannet",
@@ -138,11 +90,7 @@ PLAYERS = {
         "race": "Human",
         "irl_job": "School Principle",
         "keywords": ["Decisive", "Organized", "Authoritative"],
-        "display_text": (
-            "You naturally coordinate the group. You summarize plans, assign roles, and push toward decision closure. "
-            "In roleplay, you lean into leadership, diplomacy, and structured negotiation. Mechanically, you prefer "
-            "abilities that control space, influence allies, or establish order."
-        ),
+        "display_text": load_player_persona("Jannet"),
     },
 }
 
@@ -157,6 +105,10 @@ CLASSES = {
         "speed": 30,
         "features": ["Fighting Style - Protection", "Second Wind"],
         "weapons": ["Longsword", "Handaxe"],
+        "attack_profiles": [
+            {"name": "Longsword", "attack_formula": "1d20+5", "damage_formula": "1d8+3", "damage_type": "slashing", "range": "melee"},
+            {"name": "Handaxe", "attack_formula": "1d20+5", "damage_formula": "1d6+3", "damage_type": "slashing", "range": "melee or thrown"},
+        ],
         "inventory": ["Chain mail", "Shield", "Longsword", "Handaxe x2", "Explorer's pack"],
         "doctrine": [
             "Hold the frontline.",
@@ -175,6 +127,10 @@ CLASSES = {
         "speed": 30,
         "features": ["Rage", "Unarmored Defense"],
         "weapons": ["Greataxe", "Handaxes"],
+        "attack_profiles": [
+            {"name": "Greataxe", "attack_formula": "1d20+5", "damage_formula": "1d12+3", "damage_type": "slashing", "range": "melee"},
+            {"name": "Handaxe", "attack_formula": "1d20+5", "damage_formula": "1d6+3", "damage_type": "slashing", "range": "melee or thrown"},
+        ],
         "inventory": ["Greataxe", "Handaxe x2", "Explorer's pack", "Javelins x4"],
         "doctrine": ["Charge dangerous enemies.", "Draw enemy attention.", "Break enemy lines through aggression."],
     },
@@ -188,6 +144,10 @@ CLASSES = {
         "speed": 30,
         "features": ["Sneak Attack", "Expertise", "Thieves' Cant"],
         "weapons": ["Rapier", "Shortbow"],
+        "attack_profiles": [
+            {"name": "Rapier", "attack_formula": "1d20+5", "damage_formula": "1d8+3", "damage_type": "piercing", "range": "melee"},
+            {"name": "Shortbow", "attack_formula": "1d20+5", "damage_formula": "1d6+3", "damage_type": "piercing", "range": "ranged"},
+        ],
         "inventory": ["Leather armor", "Rapier", "Shortbow", "Arrows x20", "Thieves' tools", "Burglar pack"],
         "doctrine": ["Avoid direct confrontation.", "Strike distracted enemies.", "Exploit positioning."],
     },
@@ -201,6 +161,10 @@ CLASSES = {
         "speed": 30,
         "features": ["Favored Enemy", "Natural Explorer"],
         "weapons": ["Longbow", "Shortswords"],
+        "attack_profiles": [
+            {"name": "Longbow", "attack_formula": "1d20+5", "damage_formula": "1d8+3", "damage_type": "piercing", "range": "ranged"},
+            {"name": "Shortsword", "attack_formula": "1d20+5", "damage_formula": "1d6+3", "damage_type": "piercing", "range": "melee"},
+        ],
         "inventory": ["Scale mail", "Longbow", "Arrows x20", "Shortswords x2", "Explorer's pack"],
         "doctrine": ["Fight at range when possible.", "Use terrain advantage.", "Track enemies and scout."],
     },
@@ -214,6 +178,10 @@ CLASSES = {
         "speed": 30,
         "features": ["Divine Sense", "Lay on Hands"],
         "weapons": ["Longsword", "Javelins"],
+        "attack_profiles": [
+            {"name": "Longsword", "attack_formula": "1d20+5", "damage_formula": "1d8+3", "damage_type": "slashing", "range": "melee"},
+            {"name": "Javelin", "attack_formula": "1d20+5", "damage_formula": "1d6+3", "damage_type": "piercing", "range": "melee or thrown"},
+        ],
         "inventory": ["Chain mail", "Shield", "Longsword", "Javelins x5", "Explorer's pack", "Holy symbol"],
         "doctrine": ["Stand beside the fighter in melee.", "Protect allies.", "Deliver decisive blows."],
     },
@@ -221,12 +189,19 @@ CLASSES = {
         "class_id": "Cleric",
         "name": "Cleric",
         "role": "Divine support who heals allies, enhances party capability, and maintains battlefield stability.",
+        "class_prompt_guidance": [
+            "Use healing magic with restraint and purpose.",
+            "As a default tactical rule, only use healing spells on allies who are below half of their maximum HP, unless the GM gives a specific reason to heal someone else.",
+        ],
         "ability_scores": {"STR": 13, "DEX": 11, "CON": 14, "INT": 10, "WIS": 16, "CHA": 15},
         "hp_max": 10,
         "armor_class": 18,
         "speed": 30,
         "features": ["Spellcasting", "Divine Domain"],
         "weapons": ["Mace"],
+        "attack_profiles": [
+            {"name": "Mace", "attack_formula": "1d20+3", "damage_formula": "1d6+1", "damage_type": "bludgeoning", "range": "melee"},
+        ],
         "inventory": ["Chain mail", "Shield", "Mace", "Holy symbol", "Priest pack"],
         "doctrine": ["Sustain the party.", "Heal injured allies.", "Maintain buffs."],
     },
@@ -234,12 +209,20 @@ CLASSES = {
         "class_id": "Druid",
         "name": "Druid",
         "role": "Nature caster who controls terrain and adapts between support, control, and offense.",
+        "class_prompt_guidance": [
+            "Use healing magic with restraint and purpose.",
+            "As a default tactical rule, only use healing spells on allies who are below half of their maximum HP, unless the GM gives a specific reason to heal someone else.",
+        ],
         "ability_scores": {"STR": 11, "DEX": 13, "CON": 14, "INT": 10, "WIS": 16, "CHA": 15},
         "hp_max": 10,
         "armor_class": 14,
         "speed": 30,
         "features": ["Spellcasting", "Druidic"],
         "weapons": ["Scimitar", "Quarterstaff"],
+        "attack_profiles": [
+            {"name": "Scimitar", "attack_formula": "1d20+3", "damage_formula": "1d6+1", "damage_type": "slashing", "range": "melee"},
+            {"name": "Quarterstaff", "attack_formula": "1d20+2", "damage_formula": "1d6", "damage_type": "bludgeoning", "range": "melee"},
+        ],
         "inventory": ["Hide armor", "Scimitar", "Druidic focus", "Explorer's pack"],
         "doctrine": ["Control battlefield space.", "Support allies.", "Disrupt enemy movement."],
     },
@@ -253,6 +236,9 @@ CLASSES = {
         "speed": 30,
         "features": ["Spellcasting", "Arcane Recovery"],
         "weapons": ["Quarterstaff"],
+        "attack_profiles": [
+            {"name": "Quarterstaff", "attack_formula": "1d20+1", "damage_formula": "1d6-1", "damage_type": "bludgeoning", "range": "melee"},
+        ],
         "inventory": ["Spellbook", "Quarterstaff", "Component pouch", "Scholar pack"],
         "doctrine": ["Avoid direct melee combat.", "Control the battlefield.", "Use spells strategically."],
     },
@@ -280,6 +266,320 @@ MONSTERS = {
     "Warhorse": {"monster_id": "Warhorse", "ac": 11, "hp": 19, "attack_bonus": 6, "attack_text": "Hooves 2d6+4"},
     "Warhorse Skeleton": {"monster_id": "Warhorse Skeleton", "ac": 13, "hp": 22, "attack_bonus": 6, "attack_text": "Hooves 2d6+4"},
     "Zombie": {"monster_id": "Zombie", "ac": 8, "hp": 22, "attack_bonus": 3, "attack_text": "Slam 1d6+1"},
+}
+
+MONSTER_CATALOG = {monster_id: {**monster} for monster_id, monster in MONSTERS.items()}
+
+ADVENTURE_MAP_FILES = {
+    "icebane-castle": "Adventure-icebane-castle.png",
+    "east-marsh-raid": "Adventure-east-marsh-raid.png",
+    "telas-wagons": "Adventure-telas-wagons.jpg",
+    "old-people-barrow": "Adventure-old-people-barrow.png",
+    "collecting-taxes": "Adventure-collecting-taxes.jpg",
+    "endless-glacier-undead": "Adventure-endless-glacier-undead.png",
+}
+
+ADVENTURE_LOCATIONS = {
+    "icebane-castle": [
+        {
+            "id": "loc-1",
+            "number": 1,
+            "title": "The Thaw Gate",
+            "description": "The southern wall of Icebane Castle has partially collapsed, leaving a jagged breach where stone and ice have sheared apart. Meltwater drips steadily from exposed beams, forming slick patches across the uneven ground. The remnants of a heavy portcullis lie twisted nearby, half-frozen into the earth. Faint drafts of cold air still flow outward from deeper within, carrying the scent of ancient stone and something long sealed.",
+            "x_pct": 26.0,
+            "y_pct": 18.0,
+        },
+        {
+            "id": "loc-2",
+            "number": 2,
+            "title": "The Frost-Choked Hall",
+            "description": "A long corridor stretches inward, its vaulted ceiling fractured but still standing. Thick veins of ice crawl along the walls, preserving old banners that hang stiff and colorless. Sections of the floor remain frozen solid, while others have thawed into shallow pools. Sound carries strangely here, each step echoes too far, as if the hall remembers movement.",
+            "x_pct": 51.0,
+            "y_pct": 40.0,
+        },
+        {
+            "id": "loc-3",
+            "number": 3,
+            "title": "The Collapsed Barracks",
+            "description": "This chamber was once a soldiers' quarters, now partially caved in. Wooden bunks lie splintered beneath fallen stone, and rusted weapons are scattered among the debris. One section of the ceiling has opened to the sky, allowing pale light to filter in. Snow has drifted into the room, forming uneven mounds across the wreckage.",
+            "x_pct": 21.0,
+            "y_pct": 56.0,
+        },
+        {
+            "id": "loc-4",
+            "number": 4,
+            "title": "The Melted Armory Vault",
+            "description": "A reinforced stone chamber sits behind a warped iron door that hangs ajar. Inside, racks of weapons and armor are fused together by ice and time. Some sections have thawed just enough to reveal workable gear, while others remain encased. The air here is colder than outside, as if the room resists the thaw.",
+            "x_pct": 77.0,
+            "y_pct": 58.0,
+        },
+        {
+            "id": "loc-5",
+            "number": 5,
+            "title": "The Subterranean Reliquary",
+            "description": "A narrow stairwell descends into a partially exposed lower chamber. The room below is circular, lined with alcoves that once held relics or offerings. Many have been disturbed, some empty, others cracked open. Meltwater drips from above, forming a shallow reflective pool at the center. The space feels older than the rest of the castle.",
+            "x_pct": 48.0,
+            "y_pct": 62.0,
+        },
+        {
+            "id": "loc-6",
+            "number": 6,
+            "title": "The Fractured Throne Room",
+            "description": "At the heart of the ruins lies a grand hall split by a massive fissure running through the floor. The throne itself remains on a raised dais, partially intact but coated in frost. One side of the room has sunk slightly, creating a dangerous slope toward the crack. Light filters in through broken high windows, illuminating drifting ice particles in the air.",
+            "x_pct": 76.0,
+            "y_pct": 16.0,
+        },
+    ],
+    "east-marsh-raid": [
+        {
+            "id": "loc-1",
+            "number": 1,
+            "title": "The Blackwater Approach",
+            "description": "A stretch of ankle-deep marshwater choked with reeds and black mud. The ground shifts underfoot, and faint ripples betray movement long before sound carries. Rotting tree stumps jut like broken teeth from the water.",
+            "x_pct": 17.0,
+            "y_pct": 21.0,
+        },
+        {
+            "id": "loc-2",
+            "number": 2,
+            "title": "The Watcher's Rise",
+            "description": "A small mound of firmer ground rises above the marsh, topped with a crude wooden platform lashed together with rope and bone charms.",
+            "x_pct": 44.0,
+            "y_pct": 19.0,
+        },
+        {
+            "id": "loc-3",
+            "number": 3,
+            "title": "The Outer Camp Ring",
+            "description": "A loose ring of tents, drying racks, and tethered animals surrounds the main encampment. Mud paths connect everything in uneven loops.",
+            "x_pct": 75.0,
+            "y_pct": 29.0,
+        },
+        {
+            "id": "loc-4",
+            "number": 4,
+            "title": "The Supply Cache Pit",
+            "description": "A partially dug-out pit reinforced with timber and covered by stretched hides. Inside are crates, barrels, and bundled goods taken from raids.",
+            "x_pct": 35.0,
+            "y_pct": 46.0,
+        },
+        {
+            "id": "loc-5",
+            "number": 5,
+            "title": "The War Leader's Tent",
+            "description": "A larger, reinforced tent marked with trophies, bones, shields, and banners taken from prior victims. The ground here is more stable, deliberately chosen.",
+            "x_pct": 80.0,
+            "y_pct": 67.0,
+        },
+        {
+            "id": "loc-6",
+            "number": 6,
+            "title": "The Fog-Choked Escape Channel",
+            "description": "A narrow waterway cutting through the marsh, partially concealed by thick rolling fog. Small boats or makeshift rafts are hidden nearby.",
+            "x_pct": 41.0,
+            "y_pct": 83.0,
+        },
+    ],
+    "telas-wagons": [
+        {
+            "id": "loc-1",
+            "number": 1,
+            "title": "The Western Tundra Stretch",
+            "description": "Beyond the river, the land opens into a wide, wind-scoured tundra where the road fades into faint tracks. Sparse black pines dot the horizon, and the sky stretches endlessly overhead. Wind carries loose snow across the ground, making distance hard to judge and movement feel smaller than it is. There is no cover and nowhere to hide. The convoy is fully visible, and anything watching from afar would see it long before being seen in return.",
+            "x_pct": 63.0,
+            "y_pct": 56.0,
+        },
+        {
+            "id": "loc-2",
+            "number": 2,
+            "title": "The Barrow Approach",
+            "description": "The road skirts the Old People's Barrow, a low mound of ancient stone half-buried in frost. Faded carvings line its exposed slabs, and a thin fog clings to the ground around it. Sound dulls unnaturally here, and even the animals grow uneasy as the convoy passes. The presence of the barrow presses in from the side, making the road feel tighter and heavier, as if something beneath the earth is aware of passing movement.",
+            "x_pct": 55.0,
+            "y_pct": 39.0,
+        },
+        {
+            "id": "loc-3",
+            "number": 3,
+            "title": "The Narrow Pass",
+            "description": "The King's Way compresses between two rising ridgelines, forcing the wagons into a tight formation. Loose rock and uneven ground make footing uncertain, while brush and stone along the slopes provide intermittent cover. The sky narrows overhead, and sound echoes unpredictably between the walls. It is a natural choke point, movement is controlled, visibility is limited, and any disruption quickly affects the entire convoy.",
+            "x_pct": 52.0,
+            "y_pct": 31.0,
+        },
+        {
+            "id": "loc-4",
+            "number": 4,
+            "title": "The Whiteout Flats",
+            "description": "The land flattens into a featureless expanse where snow and sky blur together, erasing the road entirely. When the wind rises, visibility collapses to only a few paces, and direction becomes uncertain. Wagons slow as wheels grind against hidden ice beneath the snow. Progress here is difficult to maintain, cohesion can break easily, and even small delays compound quickly in the storm.",
+            "x_pct": 46.0,
+            "y_pct": 22.0,
+        },
+        {
+            "id": "loc-5",
+            "number": 5,
+            "title": "Silverrun Crossing",
+            "description": "The King's Way narrows at the Silverrun River, where a frost-rimed wooden bridge spans dark, fast-moving water. One side of the road has collapsed into a slushy rut, forcing wagons to pass single file over unstable ground. Ice chunks scrape beneath the bridge supports, and every creak of wood echoes sharply in the cold air. The crossing feels exposed and precarious, movement is slow, footing is unreliable, and a single mistake could delay the entire convoy or damage a wagon.",
+            "x_pct": 41.0,
+            "y_pct": 16.0,
+        },
+        {
+            "id": "loc-6",
+            "number": 6,
+            "title": "The Glockstead Approach",
+            "description": "The road descends toward Glockstead, its wooden walls and watchtowers just visible in the distance. The terrain becomes more stable, with boundary markers and fencing appearing along the roadside. Smoke rises from within the settlement, signaling safety that is close but not yet secured. The final stretch feels tense despite the proximity, open ground still leaves the convoy vulnerable, and any last disruption could jeopardize the delivery before reaching the gates.",
+            "x_pct": 14.0,
+            "y_pct": 11.0,
+        },
+    ],
+    "old-people-barrow": [
+        {
+            "id": "loc-1",
+            "number": 1,
+            "title": "The Frost-Cleft Entrance",
+            "description": "A collapsed section of the burial mound reveals a narrow, sloping passage descending into darkness. Stone blocks jut at odd angles where the structure has shifted, and thin ice clings to the walls. Faint carvings, worn nearly smooth, line the entry, depicting figures in procession. Cold air seeps outward from below, carrying a dry, ancient stillness that feels undisturbed for generations.",
+            "x_pct": 30.0,
+            "y_pct": 15.0,
+        },
+        {
+            "id": "loc-2",
+            "number": 2,
+            "title": "The Hall of Echoes",
+            "description": "A long, rectangular chamber stretches ahead, supported by squat stone pillars. The floor is uneven, with cracked flagstones and shallow depressions filled with frost. Every sound carries unnaturally far, repeating in soft, delayed echoes. The silence between sounds feels heavier than the echoes themselves, as if the chamber listens as much as it reflects.",
+            "x_pct": 22.0,
+            "y_pct": 40.0,
+        },
+        {
+            "id": "loc-3",
+            "number": 3,
+            "title": "The Ancestral Gallery",
+            "description": "Stone alcoves line the walls, each holding skeletal remains wrapped in decayed burial cloth. Some are intact, others collapsed into dust. Offerings, rusted weapons, cracked pottery, and fragments of jewelry rest beside them. A faint, lingering presence hangs here, as though the dead are aware of intrusion but have not yet decided how to respond.",
+            "x_pct": 15.0,
+            "y_pct": 62.0,
+        },
+        {
+            "id": "loc-4",
+            "number": 4,
+            "title": "The Sealed Door",
+            "description": "A heavy stone door blocks the path forward, its surface carved with interlocking symbols worn by time. The seams are tight, but hairline cracks suggest the seal has weakened. Frost gathers thickest here, creeping outward from the edges. The air beyond the door feels colder still, sharper, older, and more dangerous than the chambers behind.",
+            "x_pct": 53.0,
+            "y_pct": 26.0,
+        },
+        {
+            "id": "loc-5",
+            "number": 5,
+            "title": "The Burial Vault",
+            "description": "A circular chamber lies beyond, dominated by a central stone sarcophagus raised on a low platform. The walls are etched with spiraling carvings that converge toward the tomb, telling a story too eroded to fully read. Scattered relics lie around the base, some intact, others broken. This is the heart of the barrow, and the weight of its purpose is unmistakable.",
+            "x_pct": 55.0,
+            "y_pct": 49.0,
+        },
+        {
+            "id": "loc-6",
+            "number": 6,
+            "title": "The Fractured Escape Tunnel",
+            "description": "A narrow, partially collapsed passage branches away from the vault, slanting upward toward faint light. Loose stone and packed earth choke parts of the tunnel, forcing careful movement. Cold air flows unevenly through it, suggesting unstable openings above. The path offers escape but not safety, and the barrow does not easily release what enters it.",
+            "x_pct": 52.0,
+            "y_pct": 75.0,
+        },
+    ],
+    "endless-glacier-undead": [
+        {
+            "id": "loc-1",
+            "number": 1,
+            "title": "Everflame Abbey",
+            "description": "The abbey stands as a rare bastion of warmth against the glacier's edge, its ever-burning brazier casting flickering orange light across frost-covered stone. Priests move quietly, their voices low, their eyes drawn often toward the ice fields beyond. Father Balgart receives the party with urgency but restraint. Reports speak of shapes moving across the glacier at night, too many, too coordinated. Whatever stirs the dead is not recent, and not mindless.",
+            "x_pct": 48.0,
+            "y_pct": 72.0,
+        },
+        {
+            "id": "loc-2",
+            "number": 2,
+            "title": "The Frozen Pilgrim's Path",
+            "description": "A narrow, half-buried trail winds from the abbey onto the glacier, marked by old stone cairns barely visible beneath layers of snow. The wind howls across open ice, carrying whispers that almost sound like distant voices. Scattered along the path are frozen remains, pilgrims, travelers, or perhaps earlier attempts to investigate the disturbance. Some lie undisturbed. Others show signs of movement. The path is exposed and silent, offering no cover and no certainty of what lies ahead.",
+            "x_pct": 37.0,
+            "y_pct": 59.0,
+        },
+        {
+            "id": "loc-3",
+            "number": 3,
+            "title": "The Shattered Ice Field",
+            "description": "The glacier fractures into a maze of jagged ice ridges and deep crevasses, forcing careful movement between unstable ground. Cracks echo beneath each step, and distant collapses send tremors through the ice. Here, the dead begin to appear more frequently, some half-trapped in the ice, others wandering freely between the ridges. Their movements are slow, but purposeful. The terrain itself becomes a threat, turning every step into a risk as the boundary between solid ground and deadly fall blurs.",
+            "x_pct": 47.0,
+            "y_pct": 39.0,
+        },
+        {
+            "id": "loc-4",
+            "number": 4,
+            "title": "The Burial Drift",
+            "description": "A wide depression in the glacier where snow has collected into deep, wind-packed drifts. Beneath the surface, shapes can be seen, dozens of bodies frozen just below the ice. The air here is unnaturally still. Sound seems dampened, as if the snow itself absorbs it. Occasionally, the surface shifts. This place feels less like a battlefield and more like a mass grave waiting to wake.",
+            "x_pct": 63.0,
+            "y_pct": 47.0,
+        },
+        {
+            "id": "loc-5",
+            "number": 5,
+            "title": "The Black Ice Scar",
+            "description": "A long, unnatural fissure cuts across the glacier, its surface dark and glass-like rather than white. The ice here reflects distorted shapes, and movement within it suggests something beneath the surface. The undead are more aggressive here, drawn toward the fissure as if responding to a silent call. There is a sense of convergence, this is not random wandering. The dead are gathering.",
+            "x_pct": 76.0,
+            "y_pct": 66.0,
+        },
+        {
+            "id": "loc-6",
+            "number": 6,
+            "title": "The Heart of the Glacier",
+            "description": "At the far reach of the disturbance lies a partially exposed ruin, buried deep within the ice. Ancient stone protrudes through frozen layers, marked with symbols worn nearly smooth by time. The cold here is sharper, biting deeper, unnatural. This is the source. Whether it is a buried battlefield, a forgotten ritual site, or something older, it exerts a pull over the dead, binding them, directing them, refusing to let them rest. To end the disturbance, something here must be confronted, broken, or put to rest.",
+            "x_pct": 88.0,
+            "y_pct": 18.0,
+        },
+    ],
+    "collecting-taxes": [
+        {
+            "id": "loc-1",
+            "number": 1,
+            "title": "Narrow Bridge Over the Silverrun",
+            "description": "The King's Way crosses the Silverrun River over a weathered stone bridge just wide enough for a single wagon at a time. Moss clings to the stones, and the water below churns fast and cold, making any fall potentially lethal. The surrounding terrain rises slightly on both sides, with broken rock and sparse pine offering excellent cover for hidden attackers. This is a perfect choke point. A single blocked wagon halts all traffic, forcing caravans to negotiate or panic. The party can demand payment under threat of cutting the lead horse loose or tipping cargo into the river. Violence here is quick and decisive, but risky. If things go wrong, enemies can be driven into the river or the players can.",
+            "x_pct": 38.0,
+            "y_pct": 18.0,
+        },
+        {
+            "id": "loc-2",
+            "number": 2,
+            "title": "The Burned-Out Waystation",
+            "description": "A half-collapsed roadside shelter sits just off the King's Way, its roof charred and walls blackened from an old fire. Travelers still stop here out of habit, drawn by the illusion of safety and the presence of a well that still produces clean water. The surrounding tree line is dense enough to conceal multiple attackers. This location favors deception. The party can pose as survivors, guards, or fellow travelers before springing the trap. Negotiation is easier here, but so is betrayal. If handled well, the party can extract coin or goods without a fight. If mishandled, the confined space turns into a chaotic skirmish with limited escape routes.",
+            "x_pct": 53.0,
+            "y_pct": 26.0,
+        },
+        {
+            "id": "loc-3",
+            "number": 3,
+            "title": "The Fog-Choked Low Road",
+            "description": "A low stretch of the King's Way dips into marshy ground where cold air settles and thick fog lingers even during the day. Visibility drops to a few yards, and the road becomes soft and uneven, slowing wagons and separating caravan elements as they struggle through the muck. Ambushes here are disorienting and psychological. Voices echo strangely, shapes move in the mist, and it's easy to isolate targets. The party can strike from multiple directions, creating the illusion of a larger force. This is an ideal place to pressure caravans into surrender if the party plays it right.",
+            "x_pct": 69.0,
+            "y_pct": 46.0,
+        },
+        {
+            "id": "loc-4",
+            "number": 4,
+            "title": "The High Ridge Overlook",
+            "description": "The King's Way winds along the base of a rocky ridge, with a steep incline leading up to a natural overlook above the road. From this vantage point, the entire stretch below is visible, and loose stones and debris can be easily dislodged. This is a control point rather than a trap. The party can halt caravans from above, using height and threat instead of immediate violence. A rockslide or even the suggestion of one can force compliance. However, ranged retaliation becomes a real threat here, and once the party commits, there's little cover on the ridge itself.",
+            "x_pct": 27.0,
+            "y_pct": 47.0,
+        },
+        {
+            "id": "loc-5",
+            "number": 5,
+            "title": "The Wagon Bottleneck at King's Valley Pass",
+            "description": "The road narrows sharply as it enters King's Valley Pass, where sheer cliffs press in from both sides. Wagons must slow to navigate the tight turns, often bunching together as drivers wait their turn to pass through the narrowest sections. This is the most traditional ambush site, tight quarters, limited movement, and nowhere to run. The party can strike the middle of a convoy, trapping both front and rear. It's an ideal place for a decisive, forceful extraction of goods. But it's also the most dangerous. If resistance forms, the party risks being pinned in the same choke point they created.",
+            "x_pct": 71.0,
+            "y_pct": 82.0,
+        },
+        {
+            "id": "loc-6",
+            "number": 6,
+            "title": "The Open Road Near Flames' Rest Inn",
+            "description": "A short distance from the Flames' Rest Inn, the King's Way opens into a relatively safe and well-traveled stretch. Smoke from the inn's hearth is often visible in the distance, and caravans tend to relax as they approach, believing danger has passed. This location tests restraint. Attacking here risks drawing attention from the inn or other travelers, potentially escalating consequences beyond the immediate encounter. However, it's also where caravans are least guarded. The party can attempt a fast, clean interception or manipulate travelers into voluntary payment under the guise of protection.",
+            "x_pct": 86.0,
+            "y_pct": 17.0,
+        },
+    ],
 }
 
 ADVENTURES = {
@@ -377,21 +677,22 @@ ADVENTURES = {
 }
 
 PLAYER_NARRATIVE_LENSES = {
-    "Joe": "Joe's narrative lens is protective, cautious, and compassionate. He pays close attention to harm, vulnerability, consequences, and the emotional cost of events. He notices who was endangered, who was protected, who was ignored, and who suffered quietly. He does not glorify violence for its own sake. He prefers grounded, humane storytelling over flashy spectacle.",
-    "Annie": "Annie's narrative lens is bold, inspiring, and dramatic. She wants the adventure to feel heroic, cinematic, and emotionally charged. She is drawn to moments of courage, decisive action, sacrifice, and triumph under pressure. She prefers strong pacing, vivid action, and clear emotional stakes.",
-    "Tammey": "Tammey's narrative lens is supportive, steady, and empathetic. She cares about the emotional state of the group, the bonds between characters, and the importance of keeping people safe and together. She notices reassurance, cooperation, tenderness, mediation, healing, and how stress affects people over time.",
-    "Rick": "Rick's narrative lens is curious, practical, and observant. He is deeply interested in terrain, weather, movement, clues, physical details, and how people navigate the world around them. He values discovery over drama and enjoys stories that make the setting feel tangible and real.",
-    "Beau": "Beau's narrative lens is defiant, clever, and disruptive. Beau notices power, control, hypocrisy, manipulation, status games, and cracks in authority. They enjoy irony, tension, and subtle subversion. They are drawn to scenes where rules are bent, pretension is punctured, and unjust systems are challenged.",
-    "Sam": "Sam's narrative lens is playful, expressive, and unpredictable. He enjoys lively scenes, vivid reactions, sharp banter, comic relief, and absurd little details that make the world feel alive. When events become truly serious, his voice can pivot into sincerity and heart.",
-    "Tom": "Tom's narrative lens is analytical, strategic, and precise. He is interested in causality, tactical decisions, problem solving, magical logic, and how one event leads to another. He values coherence, clarity, and the satisfaction of watching a plan succeed, fail, or adapt under pressure.",
-    "Jannet": "Jannet's narrative lens is decisive, organized, and authoritative. She values structure, pacing, leadership, coordination, and clear narrative progression. She notices who took charge, how decisions were made, where the group hesitated, and how order was restored or broken.",
+    "Joe": load_narrative_lens("Joe"),
+    "Annie": load_narrative_lens("Annie"),
+    "Tammey": load_narrative_lens("Tammey"),
+    "Rick": load_narrative_lens("Rick"),
+    "Beau": load_narrative_lens("Beau"),
+    "Sam": load_narrative_lens("Sam"),
+    "Tom": load_narrative_lens("Tom"),
+    "Jannet": load_narrative_lens("Jannet"),
 }
 
-NARRATIVE_BASE_PROMPT = (
-    "You are the Narrative Agent writing the completed adventure chapter. Hold these invariant rules: third-person past "
-    "tense, include all major events, no contradiction of canon, no meta commentary, preserve chronology unless "
-    "deliberately reordering for clarity, and output a polished chapter rather than a summary blob. The selected lens "
-    "controls emphasis, tone, rhythm, and descriptive preferences. Write the chapter as continuous prose with clear "
-    "paragraphs and no headings, bullet points, or meta labels."
-)
+NARRATIVE_BASE_PROMPT = load_system_prompt("narrative_base.md")
 
+for monster_id, monster in MONSTERS.items():
+    monster["image_file"] = f"Monster-{monster_id}.webp"
+    MONSTER_CATALOG[monster_id]["image_file"] = monster["image_file"]
+
+for adventure_id, filename in ADVENTURE_MAP_FILES.items():
+    ADVENTURES[adventure_id]["map_image_file"] = filename
+    ADVENTURES[adventure_id]["locations"] = ADVENTURE_LOCATIONS[adventure_id]

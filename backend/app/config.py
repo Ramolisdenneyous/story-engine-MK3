@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://story:story@postgres:5432/story_engine"
     llm_provider: str = "mock"
     llm_model_character: str = "gpt-4o-mini"
+    llm_model_opposition: str = "gpt-4o-mini"
     llm_model_summary: str = "gpt-4o-mini"
     llm_model_narrative: str = "gpt-4o"
     llm_model_tts: str = "gpt-4o-mini-tts"

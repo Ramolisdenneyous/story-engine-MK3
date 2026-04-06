@@ -36,11 +36,15 @@ class EventKind(str, enum.Enum):
     INITIATIVE_SET = "initiative_set"
     TURN_ENDED = "turn_ended"
     DAMAGE_APPLIED = "damage_applied"
+    HP_CHANGED = "hp_changed"
     CONDITION_ADDED = "condition_added"
     CONDITION_REMOVED = "condition_removed"
     INVENTORY_GAINED = "inventory_gained"
     INVENTORY_LOST = "inventory_lost"
     IMAGE_GENERATED = "image_generated"
+    OPPOSITION_SPAWNED = "opposition_spawned"
+    MONSTER_DIED = "monster_died"
+    OPPOSITION_DISMISSED = "opposition_dismissed"
 
 
 class MemoryBlockType(str, enum.Enum):
@@ -59,7 +63,9 @@ class Session(Base):
     tab1_locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_summarized_prompt_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     narrative_agent_definition_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    current_location_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     combat_state: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
+    opposition_state: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
     generated_image: Mapped[dict] = mapped_column(json_type(), default=dict, nullable=False)
     selected_narrative_player_id: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
