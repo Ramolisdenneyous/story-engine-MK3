@@ -38,6 +38,7 @@ OPPOSITION_AGENT_SLOT = 12
 OPPOSITION_INITIATIVE_ID = "opp:12"
 OPPOSITION_DISPLAY_NAME = "Opposition"
 MONSTER_INSTANCE_LABELS = ["Monster-One", "Monster-Two", "Monster-Three", "Monster-Four"]
+logger = logging.getLogger(__name__)
 OPENING_TRANSCRIPT = (
     "Welcome to Valaska, the bitter north at the very edge of the known world. Endless forests of black pine stretch beneath "
     "iron-gray skies, and the wind carries the bite of distant glaciers.\n\n"
@@ -1047,8 +1048,20 @@ def _append_state_change(
         opposition_state = copy.deepcopy(session.opposition_state or _empty_opposition_state())
         instance = next((item for item in opposition_state.get("instances", []) if item.get("monster_id") == target_id), None)
         if not instance:
+            logger.warning(
+                "Opposition state update skipped: session=%s prompt=%s target_id=%s kind=%s amount=%s source=%s active=%s instances=%s",
+                session.session_id,
+                prompt_index,
+                target_id,
+                kind,
+                amount,
+                source,
+                opposition_state.get("active"),
+                [item.get("monster_id") for item in opposition_state.get("instances", [])],
+            )
             return
         name = instance.get("display_name") or target_id
+        hp_before = int(instance.get("current_hp", 0) or 0)
         if kind == "damage" and amount > 0:
             instance["current_hp"] = max(0, int(instance.get("current_hp", 0)) - amount)
             _append_system_event(
@@ -1092,6 +1105,20 @@ def _append_state_change(
                 f"{name} loses status: {value}.",
                 {"target_type": "monster", "target_id": target_id, "status": value, "source": source},
             )
+        hp_after = int(instance.get("current_hp", 0) or 0)
+        logger.info(
+            "Opposition state update: session=%s prompt=%s monster=%s target_id=%s kind=%s amount=%s hp_before=%s hp_after=%s is_dead=%s source=%s",
+            session.session_id,
+            prompt_index,
+            name,
+            target_id,
+            kind,
+            amount,
+            hp_before,
+            hp_after,
+            instance.get("is_dead", False),
+            source,
+        )
         if int(instance.get("current_hp", 0)) <= 0 and not instance.get("is_dead"):
             instance["current_hp"] = 0
             instance["is_dead"] = True
@@ -1104,7 +1131,25 @@ def _append_state_change(
                 {"target_type": "monster", "target_id": target_id, "source": source},
             )
         session.opposition_state = opposition_state
-        if opposition_state.get("active") and not _living_opposition_instances(opposition_state):
+        living_instances = _living_opposition_instances(opposition_state)
+        logger.info(
+            "Opposition audit: session=%s prompt=%s active=%s living_count=%s instances=%s",
+            session.session_id,
+            prompt_index,
+            opposition_state.get("active"),
+            len(living_instances),
+            [
+                {
+                    "monster_id": item.get("monster_id"),
+                    "display_name": item.get("display_name"),
+                    "current_hp": item.get("current_hp"),
+                    "hp_max": item.get("hp_max"),
+                    "is_dead": item.get("is_dead"),
+                }
+                for item in opposition_state.get("instances", [])
+            ],
+        )
+        if opposition_state.get("active") and not living_instances:
             _dismiss_opposition_state(db, session, prompt_index, reason="all_dead")
         return
 
@@ -1130,7 +1175,30 @@ def _append_state_change(
 def _dismiss_opposition_state(db: Session, session: SessionModel, prompt_index: int, reason: str) -> None:
     opposition_state = copy.deepcopy(session.opposition_state or _empty_opposition_state())
     if not opposition_state.get("active"):
+        logger.info(
+            "Opposition dismiss skipped: session=%s prompt=%s reason=%s active=%s",
+            session.session_id,
+            prompt_index,
+            reason,
+            opposition_state.get("active"),
+        )
         return
+    logger.info(
+        "Opposition dismissing: session=%s prompt=%s reason=%s instances=%s",
+        session.session_id,
+        prompt_index,
+        reason,
+        [
+            {
+                "monster_id": item.get("monster_id"),
+                "display_name": item.get("display_name"),
+                "current_hp": item.get("current_hp"),
+                "hp_max": item.get("hp_max"),
+                "is_dead": item.get("is_dead"),
+            }
+            for item in opposition_state.get("instances", [])
+        ],
+    )
     opposition_state["active"] = False
     session.opposition_state = opposition_state
     session.selected_agent_slots = [slot for slot in session.selected_agent_slots if slot != OPPOSITION_AGENT_SLOT]

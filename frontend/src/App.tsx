@@ -167,7 +167,6 @@ const MUSIC_TRACKS = [
   "Cursed Village Menu.mp3",
   "Gallows of the Forgotten King.mp3",
 ].map((fileName) => resolveApiUrl(`/music/${encodeURIComponent(fileName)}`));
-const TESTING_PASSWORD = "Rayis1cooldude";
 const ADVENTURE_TITLE_OVERRIDES: Record<string, string> = {
   "icebane-castle": "Memories of the Witch King",
   "east-marsh-raid": "Blood at Midnight",
@@ -233,10 +232,6 @@ export function App() {
   const [trackIndex, setTrackIndex] = useState(0);
   const [musicPlaying, setMusicPlaying] = useState(false);
   const [musicMuted, setMusicMuted] = useState(false);
-  const [unlocked, setUnlocked] = useState(() => window.sessionStorage.getItem("mk2_unlocked") === "true");
-  const [passwordInput, setPasswordInput] = useState("");
-  const [passwordError, setPasswordError] = useState("");
-
   const [adventureId, setAdventureId] = useState("");
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([]);
   const [classByPlayer, setClassByPlayer] = useState<Record<string, string>>({});
@@ -389,18 +384,6 @@ export function App() {
       audio.muted = nextMuted;
     }
     setMusicMuted(nextMuted);
-  }
-
-  function submitPassword(event: FormEvent) {
-    event.preventDefault();
-    if (passwordInput === TESTING_PASSWORD) {
-      window.sessionStorage.setItem("mk2_unlocked", "true");
-      setUnlocked(true);
-      setPasswordError("");
-      setPasswordInput("");
-      return;
-    }
-    setPasswordError("Incorrect password.");
   }
 
   const selectedAdventure = useMemo(
@@ -853,57 +836,6 @@ export function App() {
       >
         <source src={currentTrack} type="audio/mpeg" />
       </audio>
-      {!unlocked && (
-        <div className="splash-overlay">
-          <article className="splash-card">
-            <h1>Welcome to Story Engine MK3</h1>
-            <p>
-              Story Engine MK3 is an experimental AI-powered tabletop adventure simulator. You act as the Game Master while a
-              party of AI-controlled players explores, fights, and roleplays through a dynamic fantasy scenario. The interface is
-              organized into three tabs that guide the flow of play.
-            </p>
-            <p>
-              <strong>Tab 1 – Party Setup</strong><br />
-              Start here. Choose the players who will make up the party, assign them character classes, and select the mission the
-              group will attempt. Each player has a distinct personality and playstyle, so different combinations will produce
-              different group dynamics. Once your party and scenario are selected, the adventure is ready to begin.
-            </p>
-            <p>
-              <strong>Tab 2 – Live Adventure</strong><br />
-              This is where the game actually happens. Enter prompts to describe situations, environments, or encounters. The AI
-              players will react, make decisions, roll dice, and carry the story forward. Combat, exploration, and roleplay all
-              take place here. You guide the world as the GM while the agents act as the party.
-            </p>
-            <p>
-              <strong>Tab 3 – Story Chronicle</strong><br />
-              When the session reaches a natural stopping point, generate a written narrative of the adventure. You can choose
-              which player’s voice will tell the story, giving each chronicle a different tone and perspective. This tab compiles
-              the events of the session into a cohesive narrative record.
-            </p>
-            <p>
-              <strong>Quick Start</strong><br />
-              1. Configure your party and mission in Preparation.<br />
-              2. Move to Adventure and begin by describing the opening scene.<br />
-              3. When the session ends, visit Wrap Up to create the written chronicle.
-            </p>
-            <p>
-              Experiment with different party combinations, missions, and GM prompts. The story engine will respond differently
-              each time.
-            </p>
-            <p><strong>Enter your Testing Password below:</strong></p>
-            <form className="splash-form" onSubmit={submitPassword}>
-              <input
-                type="password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                placeholder="Testing password"
-              />
-              <button className="btn accent" type="submit">Enter</button>
-            </form>
-            {passwordError && <div className="splash-error">{passwordError}</div>}
-          </article>
-        </div>
-      )}
       <header className="hero">
         <div>
           <div className="eyebrow">Story Engine MK3</div>
